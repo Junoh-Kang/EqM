@@ -71,6 +71,7 @@ def cleanup():
     dist.destroy_process_group()
 
 
+
 def main(args):
     """
     Trains a new EqM model.
@@ -183,19 +184,20 @@ def main(args):
                 model_kwargs = dict(y=y)
             xt = z
             m = torch.zeros_like(xt).to(xt).to(device)
+            
             for i in range(args.num_sampling_steps-1):
                 if args.sampler == 'gd':
                     out = model_fn(xt, t, y, args.cfg_scale)
                     if not torch.is_tensor(out):
                         out = out[0]
                 if args.sampler == 'ngd':
-                    x_ = xt + args.stepsize*m*args.mu
+                    x_ = xt + args.stepsize * m * args.mu
                     out = model_fn(x_, t, y, args.cfg_scale)
                     if not torch.is_tensor(out):
                         out = out[0]
                     m = out
                 
-                xt = xt + out*args.stepsize
+                xt = xt + out * args.stepsize
                 t += args.stepsize
             if use_cfg:
                 xt, _ = xt.chunk(2, dim=0)
