@@ -1,0 +1,16 @@
+# python
+__pycache__/
+
+# ruff
+.ruff_cache/
+
+# output
+output
+output_131
+
+# Claude Code
+.claude/
+CLAUDE.md
+
+scripts/
+# tests/

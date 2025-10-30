@@ -51,7 +51,7 @@ def create_npz_from_sample_folder(sample_dir, num=50_000):
         samples.append(sample_np)
     samples = np.stack(samples)
     assert samples.shape == (num, samples.shape[1], samples.shape[2], 3)
-    npz_path = f"{sample_dir}.npz"
+    npz_path = f"{sample_dir}/samples.npz"
     np.savez(npz_path, arr_0=samples)
     print(f"Saved .npz file to {npz_path} [shape={samples.shape}].")
     return npz_path
@@ -208,7 +208,7 @@ def main(args):
         dist.barrier()
     if rank == 0:
         print("Creating .npz file")
-        create_npz_from_sample_folder(args.folder, 50000)
+        create_npz_from_sample_folder(args.folder, args.num_fid_samples)
         print("Done!")
     cleanup()
 
