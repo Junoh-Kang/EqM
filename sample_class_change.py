@@ -39,6 +39,8 @@ from torchvision.transforms.functional import to_pil_image
 from pathlib import Path
 import torch.nn.functional as F
 
+import copy 
+from utils import save_pair_grid
 
 def create_npz_from_sample_folder(sample_dir, num=50_000):
     """
@@ -156,7 +158,7 @@ def main(args):
         model_fn = ema.forward    
 
     if rank == 0:
-        ubfolder_name = f"cfg{args.cfg_scale}_step{args.stepsize}_nsteps{args.num_sampling_steps}"
+        subfolder_name = f"cfg{args.cfg_scale}_step{args.stepsize}_nsteps{args.num_sampling_steps}"
         args.folder = os.path.join(args.folder, subfolder_name)
         os.makedirs(args.folder, exist_ok=True)
         print(f"Saving to: {args.folder}")
@@ -175,8 +177,69 @@ def main(args):
     n = int(args.global_batch_size // dist.get_world_size())
     for i in pbar:
         with torch.no_grad():
+            
+            # class 1 (dog: 151~268, cat: 281~285)
             z = torch.randn(n, 4, latent_size, latent_size, device=device)
+            # y = torch.tensor([151] * n, device=device)
             y = torch.randint(0, args.num_classes, (n,), device=device)
+            t = torch.ones((n,)).to(z).to(device)
+            if use_cfg:
+                z = torch.cat([z, z], 0)
+                y_null = torch.tensor([1000] * n, device=device)
+                y = torch.cat([y, y_null], 0)
+                model_kwargs = dict(y=y, cfg_scale=args.cfg_scale)
+                t = torch.cat([t, t], 0)
+            else:
+                model_kwargs = dict(y=y)
+            xt = z
+            m = torch.zeros_like(xt).to(xt).to(device)
+            
+            for i in range(args.num_sampling_steps-1):
+                if args.sampler == 'gd':
+                    out = model_fn(xt, t, y, args.cfg_scale)
+                    if not torch.is_tensor(out):
+                        out = out[0]
+                if args.sampler == 'ngd':
+                    x_ = xt + args.stepsize * m * args.mu
+                    out = model_fn(x_, t, y, args.cfg_scale)
+                    if not torch.is_tensor(out):
+                        out = out[0]
+                    m = out
+
+                xt = xt + out * args.stepsize
+                t += args.stepsize
+                if i % 10 == 0:
+                    print(out.norm(p=2))
+        
+            if use_cfg:
+                xt, _ = xt.chunk(2, dim=0)
+            intermediate = xt.clone()
+            print("intermediate sample done")
+
+            grad_mag = []
+            t = torch.ones((n,)).to(z).to(device)
+            for class_num in range(1000):
+                y = torch.tensor([class_num] * n, device=device)
+                model_kwargs = dict(y=y)
+                out = model_fn(xt, t, y, 1)
+                if not torch.is_tensor(out):
+                    out = out[0]
+                grad_mag.append(out.norm(p=2).item())
+
+            grad_mag = torch.tensor(grad_mag)
+            max_mag, max_idx = grad_mag.max(dim=0)
+            min_mag, min_idx = grad_mag.min(dim=0)
+            mean_mag = grad_mag.mean()
+
+            print(f"최대: class={max_idx.item()}, magnitude={max_mag.item():.4f}")
+            print(f"최소: class={min_idx.item()}, magnitude={min_mag.item():.4f}")
+            print(f"평균: magnitude={mean_mag.item():.4f}")
+
+            
+            # class 2
+            z = xt
+            y = torch.tensor([max_idx] * n, device=device)
+            # y = torch.randint(0, args.num_classes, (n,), device=device)
             t = torch.ones((n,)).to(z).to(device)
             if use_cfg:
                 z = torch.cat([z, z], 0)
@@ -203,19 +266,33 @@ def main(args):
                 
                 xt = xt + out * args.stepsize
                 t += args.stepsize
+
+                if i % 10 == 0:
+                    print(out.norm(p=2))
+            
             if use_cfg:
                 xt, _ = xt.chunk(2, dim=0)
-            samples = vae.decode(xt / 0.18215).sample
-            samples = torch.clamp(127.5 * samples + 128.0, 0, 255).permute(0, 2, 3, 1).to("cpu", dtype=torch.uint8).numpy()
-            for i, sample in enumerate(samples):
+
+            samples_inter = vae.decode(intermediate / 0.18215).sample
+            samples_inter = torch.clamp(127.5 * samples_inter + 128.0, 0, 255).permute(0, 2, 3, 1).to("cpu", dtype=torch.uint8).numpy()
+
+            samples_final = vae.decode(xt / 0.18215).sample
+            samples_final = torch.clamp(127.5 * samples_final + 128.0, 0, 255).permute(0, 2, 3, 1).to("cpu", dtype=torch.uint8).numpy()
+
+            for i, (sample_inter, sample_final) in enumerate(zip(samples_inter, samples_final)):
                 index = i * dist.get_world_size() + rank + total
-                Image.fromarray(sample).save(f"{args.folder}/{index:06d}.png")
+                out_path = f"{args.folder}/{index:06d}.png"
+                save_pair_grid(sample_inter, sample_final, out_path)
+
+            # for i, sample in enumerate(samples):
+            #     index = i * dist.get_world_size() + rank + total
+            #     Image.fromarray(sample).save(f"{args.folder}/{index:06d}.png")
         total += args.global_batch_size
         dist.barrier()
-    if rank == 0:
-        print("Creating .npz file")
-        create_npz_from_sample_folder(args.folder, args.num_fid_samples)
-        print("Done!")
+    # if rank == 0:
+    #     print("Creating .npz file")
+    #     create_npz_from_sample_folder(args.folder, args.num_fid_samples)
+    #     print("Done!")
     cleanup()
 
 

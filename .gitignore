@@ -1,12 +1,11 @@
 # python
 __pycache__/
+ipynb_checkpoints/
 
 # ruff
-.ruff_cache/
+ruff_cache/
 
 # output
-output
-output_131
 
 # Claude Code
 .claude/
