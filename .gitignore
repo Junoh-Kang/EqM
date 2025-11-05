@@ -13,3 +13,5 @@ output_131
 CLAUDE.md
 
 scripts
+.backup_local/
+fid.txt
