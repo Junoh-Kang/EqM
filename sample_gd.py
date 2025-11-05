@@ -24,6 +24,7 @@ from time import time
 import argparse
 import logging
 import os
+import json
 from tqdm import tqdm
 from models import EqM_models
 from download import find_model
@@ -62,6 +63,70 @@ def requires_grad(model, flag=True):
     """
     for p in model.parameters():
         p.requires_grad = flag
+
+
+def save_gradient_norm_statistics(gradient_norms, args, folder):
+    """
+    Compute statistics and create visualization for gradient norms during sampling.
+
+    Args:
+        gradient_norms: List of lists containing gradient L2 norms for each step
+                       gradient_norms[step_idx] contains norms from all samples across all batches
+        args: Arguments containing sampling parameters (num_sampling_steps, stepsize, sampler)
+        folder: Output directory for saving JSON and plot
+
+    Note:
+        Statistics (mean, std) are computed across all samples (batch-size independent).
+    """
+    print("Computing gradient norm statistics...")
+    gradient_means = []
+    gradient_stds = []
+
+    for step_norms in gradient_norms:
+        if len(step_norms) > 0:
+            gradient_means.append(np.mean(step_norms))
+            gradient_stds.append(np.std(step_norms))
+        else:
+            gradient_means.append(0.0)
+            gradient_stds.append(0.0)
+
+    # Save statistics to JSON
+    stats = {
+        "num_sampling_steps": args.num_sampling_steps - 1,
+        "total_samples": len(gradient_norms[0]) if len(gradient_norms[0]) > 0 else 0,
+        "mean": gradient_means,
+        "std": gradient_stds,
+        "stepsize": args.stepsize,
+        "sampler": args.sampler,
+        "note": "Statistics computed from individual gradient L2 norms across all samples (batch-size independent)"
+    }
+    json_path = f"{folder}/gradient_norms.json"
+    with open(json_path, 'w') as f:
+        json.dump(stats, f, indent=2)
+    print(f"Saved gradient norm statistics to {json_path}")
+
+    # Create plot
+    print("Creating gradient norm plot...")
+    steps = np.arange(args.num_sampling_steps - 1)
+    gradient_means = np.array(gradient_means)
+    gradient_stds = np.array(gradient_stds)
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(steps, gradient_means, linewidth=2, label='Mean L2 Norm')
+    plt.fill_between(steps, gradient_means - gradient_stds, gradient_means + gradient_stds,
+                     alpha=0.3, label='Mean ± Std')
+    plt.xlabel('Sampling Step', fontsize=12)
+    plt.ylabel('Gradient L2 Norm', fontsize=12)
+    plt.title(f'Gradient L2 Norm during Sampling ({args.sampler.upper()}, stepsize={args.stepsize})',
+              fontsize=14)
+    plt.legend(fontsize=10)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    plot_path = f"{folder}/gradient_norms.png"
+    plt.savefig(plot_path, dpi=150)
+    print(f"Saved gradient norm plot to {plot_path}")
+    plt.close()
 
 
 def cleanup():
@@ -169,6 +234,10 @@ def main(args):
     pbar = tqdm(pbar) if rank == 0 else pbar
     total = 0
     n = int(args.global_batch_size // dist.get_world_size())
+
+    # Initialize gradient norm accumulator for each sampling step
+    gradient_norms = [[] for _ in range(args.num_sampling_steps - 1)]
+
     for i in pbar:
         with torch.no_grad():
             z = torch.randn(n, 4, latent_size, latent_size, device=device)
@@ -185,7 +254,7 @@ def main(args):
             xt = z
             m = torch.zeros_like(xt).to(xt).to(device)
             
-            for i in range(args.num_sampling_steps-1):
+            for step_idx in range(args.num_sampling_steps-1):
                 if args.sampler == 'gd':
                     out = model_fn(xt, t, y, args.cfg_scale)
                     if not torch.is_tensor(out):
@@ -196,7 +265,21 @@ def main(args):
                     if not torch.is_tensor(out):
                         out = out[0]
                     m = out
-                
+
+                # Compute L2 norm of the gradient output
+                # If using CFG, only compute norm on conditional part (first half)
+                if use_cfg:
+                    assert out.shape[0] == 2 * n, "Output shape should be 2 * n when using CFG"
+                    out_for_norm = out[:n]
+                else:
+                    out_for_norm = out
+
+                # Compute L2 norm for each sample in the batch
+                norms = torch.linalg.norm(
+                    out_for_norm.reshape(out_for_norm.shape[0], -1), dim=1
+                )  # shape: (batch_size,)
+                gradient_norms[step_idx].extend(norms.cpu().tolist())
+
                 xt = xt + out * args.stepsize
                 t += args.stepsize
             if use_cfg:
@@ -209,9 +292,15 @@ def main(args):
         total += args.global_batch_size
         dist.barrier()
     if rank == 0:
+        # Save gradient norm statistics and create plot
+        print("Saving gradient norm statistics and creating plot")
+        save_gradient_norm_statistics(gradient_norms, args, args.folder)
+
         print("Creating .npz file")
         create_npz_from_sample_folder(args.folder, args.num_fid_samples)
+
         print("Done!")
+
     cleanup()
 
 
