@@ -12,5 +12,4 @@ output_131
 .claude/
 CLAUDE.md
 
-scripts/
-# tests/
+scripts
