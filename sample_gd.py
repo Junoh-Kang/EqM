@@ -160,7 +160,14 @@ def main(args):
     torch.cuda.set_device(device)
     print(f"Starting rank={rank}, seed={seed}, world_size={dist.get_world_size()}.")
     local_batch_size = int(args.global_batch_size // dist.get_world_size())
-    
+
+    # Parse save-steps argument
+    save_steps_list = []
+    if args.save_steps is not None:
+        save_steps_list = [int(s.strip()) for s in args.save_steps.split(',')]
+        if rank == 0:
+            print(f"Will save intermediate images at steps: {save_steps_list}")
+
     # Create model:
     assert args.image_size % 8 == 0, "Image size must be divisible by 8 (for the VAE encoder)."
     latent_size = args.image_size // 8
@@ -282,12 +289,24 @@ def main(args):
 
                 xt = xt + out * args.stepsize
                 t += args.stepsize
+
+                # Save intermediate images if this step is in save_steps_list
+                if step_idx in save_steps_list:
+                    step_folder = f"{args.folder}/step_{step_idx:03d}"
+                    os.makedirs(step_folder, exist_ok=True)
+                    xt_save = xt[:n] if use_cfg else xt
+                    samples_intermediate = vae.decode(xt_save / 0.18215).sample
+                    samples_intermediate = torch.clamp(127.5 * samples_intermediate + 128.0, 0, 255).permute(0, 2, 3, 1).to("cpu", dtype=torch.uint8).numpy()
+                    for i_sample, sample in enumerate(samples_intermediate):
+                        index = i_sample * dist.get_world_size() + rank + total
+                        Image.fromarray(sample).save(f"{step_folder}/{index:06d}.png")
+
             if use_cfg:
                 xt, _ = xt.chunk(2, dim=0)
             samples = vae.decode(xt / 0.18215).sample
             samples = torch.clamp(127.5 * samples + 128.0, 0, 255).permute(0, 2, 3, 1).to("cpu", dtype=torch.uint8).numpy()
-            for i, sample in enumerate(samples):
-                index = i * dist.get_world_size() + rank + total
+            for i_sample, sample in enumerate(samples):
+                index = i_sample * dist.get_world_size() + rank + total
                 Image.fromarray(sample).save(f"{args.folder}/{index:06d}.png")
         total += args.global_batch_size
         dist.barrier()
@@ -298,6 +317,14 @@ def main(args):
 
         print("Creating .npz file")
         create_npz_from_sample_folder(args.folder, args.num_fid_samples)
+
+        # Create NPZ files for intermediate steps
+        if len(save_steps_list) > 0:
+            print("Creating .npz files for intermediate steps")
+            for step in save_steps_list:
+                step_folder = f"{args.folder}/step_{step:03d}"
+                print(f"Creating .npz file for step {step}")
+                create_npz_from_sample_folder(step_folder, args.num_fid_samples)
 
         print("Done!")
 
@@ -324,6 +351,8 @@ if __name__ == "__main__":
     parser.add_argument("--mu", type=float, default=0.3,
                         help="NAG-GD hyperparameter mu")
     parser.add_argument("--num-fid-samples", type=int, default=50000)
+    parser.add_argument("--save-steps", type=str, default=None,
+                        help="Comma-separated list of sampling steps to save intermediate images (e.g., '0,50,100,249')")
     parser.add_argument("--uncond", type=bool, default=True,
                         help="disable/enable noise conditioning")
     parser.add_argument("--ebm", type=str, choices=["none", "l2", "dot", "mean"], default="none",
