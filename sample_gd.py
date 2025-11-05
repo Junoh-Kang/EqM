@@ -38,7 +38,6 @@ import torchvision.transforms.functional as TF
 from torchvision.transforms.functional import to_pil_image
 from pathlib import Path
 import torch.nn.functional as F
-from sampling_utils import sample_eqm
 
 
 def create_npz_from_sample_folder(sample_dir, num=50_000):
@@ -170,13 +169,10 @@ def main(args):
     pbar = tqdm(pbar) if rank == 0 else pbar
     total = 0
     n = int(args.global_batch_size // dist.get_world_size())
-    sanity_check_done = False
     for i in pbar:
         with torch.no_grad():
-            z_orig = torch.randn(n, 4, latent_size, latent_size, device=device)
-            y_orig = torch.randint(0, args.num_classes, (n,), device=device)
-            z = z_orig.clone()
-            y = y_orig.clone()
+            z = torch.randn(n, 4, latent_size, latent_size, device=device)
+            y = torch.randint(0, args.num_classes, (n,), device=device)
             t = torch.ones((n,)).to(z).to(device)
             if use_cfg:
                 z = torch.cat([z, z], 0)
@@ -207,62 +203,6 @@ def main(args):
                 xt, _ = xt.chunk(2, dim=0)
             samples = vae.decode(xt / 0.18215).sample
             samples = torch.clamp(127.5 * samples + 128.0, 0, 255).permute(0, 2, 3, 1).to("cpu", dtype=torch.uint8).numpy()
-
-            # Sanity check: compare original implementation with new sampling function (first batch only)
-            if rank == 0 and not sanity_check_done:
-                sanity_check_done = True
-                print("\n=== Running Sanity Check: Comparing original vs new sampling function ===")
-                print(f"Using sampler: {args.sampler}, CFG scale: {args.cfg_scale}")
-
-                # Run new sampling function with EXACT same initial conditions
-                samples_new = sample_eqm(
-                    model=ema,
-                    vae=vae,
-                    device=device,
-                    batch_size=n,
-                    latent_size=latent_size,
-                    num_classes=args.num_classes,
-                    num_sampling_steps=args.num_sampling_steps,
-                    stepsize=args.stepsize,
-                    cfg_scale=args.cfg_scale,
-                    sampler=args.sampler,
-                    mu=args.mu,
-                    class_labels=y_orig,  # Use exact same labels
-                    initial_noise=z_orig   # Use exact same initial noise
-                )
-
-                # Compare results
-                diff = np.abs(samples.astype(np.float32) - samples_new.astype(np.float32))
-                max_diff = diff.max()
-                mean_diff = diff.mean()
-                std_diff = diff.std()
-
-                print(f"Max pixel difference: {max_diff:.4f}")
-                print(f"Mean pixel difference: {mean_diff:.4f}")
-                print(f"Std pixel difference: {std_diff:.4f}")
-
-                if max_diff < 1.0:
-                    print("✓ PASS: Results match perfectly (within 1 pixel)!")
-                elif mean_diff < 1.0:
-                    print("✓ PASS: Results are nearly identical (minor numerical differences)")
-                    print(f"  Pixels with diff > 5: {(diff > 5).sum()} / {diff.size}")
-                else:
-                    print("✗ WARNING: Significant differences detected!")
-                    print(f"  Pixels with diff > 5: {(diff > 5).sum()} / {diff.size}")
-                    print(f"  Pixels with diff > 10: {(diff > 10).sum()} / {diff.size}")
-
-                # Save comparison images for visual inspection
-                if max_diff >= 1.0:
-                    comparison_dir = f"{args.folder}_comparison"
-                    os.makedirs(comparison_dir, exist_ok=True)
-                    Image.fromarray(samples[0]).save(f"{comparison_dir}/original.png")
-                    Image.fromarray(samples_new[0]).save(f"{comparison_dir}/new_function.png")
-                    diff_img = (diff[0]).astype(np.uint8)
-                    Image.fromarray(diff_img).save(f"{comparison_dir}/difference.png")
-                    print(f"  Saved comparison images to {comparison_dir}/")
-
-                print("=== Sanity Check Complete ===\n")
-
             for i, sample in enumerate(samples):
                 index = i * dist.get_world_size() + rank + total
                 Image.fromarray(sample).save(f"{args.folder}/{index:06d}.png")
