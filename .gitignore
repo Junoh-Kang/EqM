@@ -13,3 +13,6 @@ output_131
 CLAUDE.md
 
 scripts
+.backup_local/
+fid*
+classify_image_graph_def.pb
