@@ -14,4 +14,5 @@ CLAUDE.md
 
 scripts
 .backup_local/
-fid.txt
+fid*
+classify_image_graph_def.pb
