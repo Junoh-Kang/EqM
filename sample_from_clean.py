@@ -76,10 +76,11 @@ def main(args):
 
     # Randomly sample num_samples images
     import random
+
     random.seed(args.seed)
     all_indices = list(range(len(val_dataset)))
     random.shuffle(all_indices)
-    indices = all_indices[:args.num_samples]
+    indices = all_indices[: args.num_samples]
     indices.sort()  # Sort for reproducibility
     subset_dataset = Subset(val_dataset, indices)
     print(f"Selected {len(subset_dataset)} validation images (random sample)")
@@ -144,14 +145,6 @@ def main(args):
     print(f"Encoded {all_latents.shape[0]} images to latent space")
     print(f"Latent shape: {all_latents.shape}")
 
-    # Save original clean images for comparison
-    print("Saving original clean images...")
-    from sampling_utils import decode_latents
-
-    original_images = decode_latents(vae, all_latents.to(device))
-    for idx, img in enumerate(original_images):
-        Image.fromarray(img).save(f"{original_folder}/{idx:06d}.png")
-    print(f"Saved {len(original_images)} original images to {original_folder}")
 
     # Compute high-frequency content for all images
     print("Computing high-frequency content metrics...")
@@ -215,6 +208,13 @@ def main(args):
 
         batch_latents = all_latents[batch_start:batch_end]
         batch_labels = all_class_labels[batch_start:batch_end]
+
+        # Save original clean images for this batch
+        from sampling_utils import decode_latents
+        original_batch_images = decode_latents(vae, batch_latents.to(device))
+        for i_sample, img in enumerate(original_batch_images):
+            index = total_saved + i_sample
+            Image.fromarray(img).save(f"{original_folder}/{index:06d}.png")
 
         # Generate samples for this batch, starting from clean latents
         samples = sample_eqm(
