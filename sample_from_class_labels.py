@@ -133,12 +133,16 @@ def main(args):
 
     # Sample each image
     total_samples = len(class_labels)
+    actual_labels = []  # Track actual class labels used for each sample
     for sample_idx in tqdm(range(total_samples), desc="Generating samples"):
         # Get class label for this sample
         if class_labels[sample_idx] is None:
             y = torch.randint(0, args.num_classes, (1,), device=device)
         else:
             y = torch.tensor([class_labels[sample_idx]], device=device)
+
+        # Store the actual class label used
+        actual_labels.append(y.item())
 
         # Create initial noise
         z = torch.randn(1, 4, latent_size, latent_size, device=device)
@@ -211,8 +215,15 @@ def main(args):
             save_path_root = os.path.join(args.folder, f"{sample_idx:06d}.png")
             save_image(final_image, save_path_root)
 
+    # Save class labels to text file
+    labels_path = os.path.join(args.folder, "labels.txt")
+    with open(labels_path, 'w') as f:
+        for label in actual_labels:
+            f.write(f"{label}\n")
+
     print(f"\nDone! Generated {total_samples} samples in {args.folder}")
     print(f"Final images: {args.folder}/######.png")
+    print(f"Class labels: {labels_path}")
     if args.save_interval is not None:
         print(f"Intermediate images: {args.folder}/sample_###/step_###.png")
 
