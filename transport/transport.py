@@ -1,13 +1,14 @@
-import torch as th
-import numpy as np
+import enum
 import logging
+
+import numpy as np
+import torch as th
 import torch.distributed as dist
 
-import enum
-
 from . import path
-from .utils import EasyDict, log_state, mean_flat
 from .integrators import ode, sde
+from .utils import EasyDict, log_state, mean_flat
+
 
 class ModelType(enum.Enum):
     """
@@ -195,8 +196,9 @@ class Transport:
             return (-drift_mean + drift_var * score)
         
         def velocity_ode(x, t, model, **model_kwargs):
+            ct = self.get_ct(t)[:,None,None,None]
             model_output = model(x, t, **model_kwargs)
-            return model_output
+            return model_output * (1 / th.max(ct, th.tensor(1e-6, device=ct.device))) # avoid division by zero
 
         if self.model_type == ModelType.NOISE:
             drift_fn = noise_ode

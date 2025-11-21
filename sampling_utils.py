@@ -192,7 +192,7 @@ class IntermediateImageSaver:
     Hook for saving intermediate images during sampling.
 
     Args:
-        save_steps: List of step indices at which to save images (e.g., [0, 50, 100, 249])
+        save_steps: List of step indices at which to save images (e.g., [0, 50, 100, 250])
         output_folder: Base folder for saving images
     """
 
