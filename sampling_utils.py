@@ -172,6 +172,161 @@ def sample_eqm(
 
     return samples
 
+@torch.no_grad()
+def sample_eqm_two(
+    model,
+    vae,
+    device,
+    batch_size,
+    latent_size,
+    initial_latent=None,
+    class_labels=None,
+    num_sampling_steps=250,
+    stepsize=0.0017,
+    cfg_scale=4.0,
+    sampler="gd",
+    mu=0.3,
+    hooks=[],
+):
+    """
+    Generate samples using EqM model with gradient descent sampling.
+
+    Args:
+        model: The EqM model (should be in eval mode)
+        vae: VAE decoder for latent to image conversion
+        device: torch device to run on
+        batch_size: Number of samples to generate
+        latent_size: Size of latent space (image_size // 8)
+        initial_latent: Initial latent noise tensor, shape (batch_size, 4, latent_size, latent_size).
+                       If None, random noise is generated.
+        class_labels: Specific class labels to use, shape (batch_size,).
+                     If None, random labels from 0-999 are used.
+        num_sampling_steps: Number of sampling iterations (default: 250)
+        stepsize: Step size eta for gradient updates (default: 0.0017)
+        cfg_scale: Classifier-free guidance scale (default: 4.0).
+                   Set to > 1.0 to enable CFG.
+        sampler: Sampling method, 'gd' (gradient descent) or 'ngd' (NAG-GD) (default: 'gd')
+        mu: NAG-GD momentum hyperparameter (default: 0.3, only used when sampler='ngd')
+        hooks: List of hook callables. Each hook receives a SamplingHookContext object
+               at each sampling step. Use for monitoring, logging, or saving intermediate results.
+               Example hooks: IntermediateImageSaver, GradientNormTracker.
+
+    Returns:
+        samples: Generated images as numpy array, shape (batch_size, H, W, 3), dtype uint8
+
+    Example:
+        >>> # Basic usage
+        >>> samples = sample_eqm(model, vae, device, batch_size=16, latent_size=32)
+        >>>
+        >>> # With hooks for monitoring
+        >>> from sampling_utils import IntermediateImageSaver, GradientNormTracker
+        >>> img_hook = IntermediateImageSaver([0, 50, 100, 249], "outputs")
+        >>> grad_hook = GradientNormTracker(num_sampling_steps=250)
+        >>> samples = sample_eqm(model, vae, device, batch_size=16, latent_size=32, hooks=[img_hook, grad_hook])
+        >>> grad_hook.finalize(args, "outputs")
+    """
+    use_cfg = cfg_scale > 1.0
+    n = batch_size
+
+    # Initialize random latent noise
+    if initial_latent is not None:
+        z = initial_latent.clone()
+    else:
+        z = torch.randn(n, 4, latent_size, latent_size, device=device)
+
+    # Generate or use provided class labels
+    if class_labels is None:
+        y = torch.randint(0, 1000, (n,), device=device)
+    else:
+        y = class_labels.to(device)
+
+    # Initialize timestep
+    t = torch.ones((n,)).to(device)
+
+    # Setup classifier-free guidance
+    if use_cfg:
+        z = torch.cat([z, z], 0)
+        y_null = torch.tensor([1000] * n, device=device)
+        y = torch.cat([y, y_null], 0)
+        t = torch.cat([t, t], 0)
+        model_fn = model.forward_with_cfg
+    else:
+        model_fn = model.forward
+
+    # Initialize latent variable and momentum
+    xt = z
+    m = torch.zeros_like(xt).to(device)
+
+    # Sampling loop
+    with torch.no_grad():
+        for step_idx in range(1, num_sampling_steps + 1):
+            if sampler == "gd":
+                # Standard gradient descent
+                out = model_fn(xt, t, y, cfg_scale)
+                if not torch.is_tensor(out):
+                    out = out[0]
+            elif sampler == "ngd":
+                # Nesterov accelerated gradient descent
+                x_ = xt + stepsize * m * mu
+                out = model_fn(x_, t, y, cfg_scale)
+                if not torch.is_tensor(out):
+                    out = out[0]
+                m = out
+            else:
+                raise ValueError(f"Unknown sampler: {sampler}")
+
+            if step_idx == (num_sampling_steps + 1) // 2:
+                if use_cfg:
+                    original_y, _ = y.chunk(2, dim=0)
+                else:
+                    original_y = y
+                new_y = []
+                for orig_class in original_y:
+                    # 원래 class를 제외한 랜덤 class 선택
+                    available_classes = list(range(args.num_classes))
+                    available_classes.remove(orig_class.item())
+                    new_class = np.random.choice(available_classes)
+                    new_y.append(new_class)
+                    
+                y = torch.tensor(new_y, device=device)
+                
+                if use_cfg:
+                    y_null = torch.tensor([1000] * n, device=device)
+                    y = torch.cat([y, y_null], 0)
+                    model_fn = model.forward_with_cfg
+                else:
+                    model_fn = model.forward
+
+
+            # Update latent and timestep
+            xt = xt + out * stepsize
+            t += stepsize
+
+            # Call hooks with context
+            if hooks:
+                context = SamplingHookContext(
+                    xt=xt,
+                    t=t,
+                    y=y,
+                    out=out,
+                    step_idx=step_idx,
+                    use_cfg=use_cfg,
+                    vae=vae,
+                    device=device,
+                    total_steps=num_sampling_steps,
+                )
+                for hook in hooks:
+                    hook(context)
+                
+
+        # Remove duplicates from CFG
+        if use_cfg:
+            xt, _ = xt.chunk(2, dim=0)
+
+        samples = decode_latents(vae, xt)
+
+    return samples
+
 
 @dataclass
 class SamplingHookContext:

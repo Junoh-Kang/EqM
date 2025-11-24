@@ -1,5 +1,6 @@
 # python
 __pycache__/
+test/
 
 # ruff
 .ruff_cache/
@@ -16,3 +17,5 @@ scripts
 .backup_local/
 fid*
 classify_image_graph_def.pb
+.vscode/
+*.ipynb

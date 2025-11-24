@@ -3,6 +3,9 @@ import torch
 from typing import List, Union, Optional, Tuple
 from PIL import Image
 
+
+
+
 ArrayLike = Union[np.ndarray, torch.Tensor, Image.Image]
 
 def _to_pil(img: ArrayLike) -> Image.Image:
@@ -115,6 +118,49 @@ def save_image_grid(
     canvas.save(out_path)
 
 
-def save_pair_grid(sample_left, sample_right, out_path):
-    """Convenience wrapper for 1x2 grid (backward compatibility)."""
-    save_image_grid([sample_left, sample_right], out_path, nrows=1, ncols=2, padding=0)
+def fft_image(images):
+    # Convert numpy to torch if needed
+    if isinstance(images, np.ndarray):
+        # Assume (B, H, W, 3) format
+        images = torch.from_numpy(images).permute(0, 3, 1, 2).float()
+
+    if images.shape[1] == 3:
+        grayscale = 0.299 * images[:, 0] + 0.587 * images[:, 1] + 0.114 * images[:, 2]
+    else:
+        grayscale = images.squeeze(1)
+    
+    high_freq_metrics = []
+
+    for i in range(batch_size):
+        # Compute 2D FFT
+        fft = torch.fft.fft2(grayscale[i])
+        fft_shifted = torch.fft.fftshift(fft)  # Shift zero frequency to center
+        magnitude = torch.abs(fft_shifted)
+
+        # Get dimensions
+        h, w = magnitude.shape
+        center_h, center_w = h // 2, w // 2
+
+        # Create a mask for high-frequency components (outer 50% of spectrum)
+        # High frequencies are far from the center
+        y, x = torch.meshgrid(torch.arange(h), torch.arange(w), indexing="ij")
+        dist_from_center = torch.sqrt(((y - center_h) ** 2 + (x - center_w) ** 2).float())
+        max_dist = torch.sqrt(torch.tensor(center_h**2 + center_w**2).float())
+
+        # High-frequency mask: distance > 50% of max distance
+        high_freq_mask = dist_from_center > (0.5 * max_dist)
+
+        # Compute energy in high-frequency bands
+        high_freq_energy = (magnitude[high_freq_mask] ** 2).sum().item()
+        total_energy = (magnitude**2).sum().item()
+
+        # Normalize by total energy to get relative high-frequency content
+        if total_energy > 0:
+            high_freq_ratio = high_freq_energy / total_energy
+        else:
+            high_freq_ratio = 0.0
+
+        high_freq_metrics.append(high_freq_ratio)
+
+def fft_latent():
+    pass
