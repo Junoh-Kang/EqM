@@ -162,6 +162,7 @@ def sample_eqm(
                 )
                 for hook in hooks:
                     hook(context)
+                
 
         # Remove duplicates from CFG
         if use_cfg:
@@ -399,7 +400,7 @@ class GradientNormTracker:
     """
 
     def __init__(self, num_steps):
-        self.gradient_norms = [[] for _ in range(num_steps - 1)]
+        self.gradient_norms = [[] for _ in range(num_steps)]
 
     def __call__(self, context: SamplingHookContext):
         """Accumulate gradient L2 norms for the current step."""
@@ -411,8 +412,8 @@ class GradientNormTracker:
 
         # Compute L2 norm for each sample in the batch
         norms = torch.linalg.norm(out_for_norm.reshape(out_for_norm.shape[0], -1), dim=1)  # shape: (batch_size,)
+        self.gradient_norms[context.step_idx-1].extend(norms.cpu().tolist())
 
-        self.gradient_norms[context.step_idx].extend(norms.cpu().tolist())
 
     def finalize(self, args, folder):
         """
@@ -437,7 +438,7 @@ class GradientNormTracker:
 
         # Save statistics to JSON
         stats = {
-            "num_sampling_steps": args.num_sampling_steps - 1,
+            "num_sampling_steps": args.num_sampling_steps,
             "total_samples": len(self.gradient_norms[0]) if len(self.gradient_norms[0]) > 0 else 0,
             "mean": gradient_means,
             "std": gradient_stds,
@@ -452,7 +453,7 @@ class GradientNormTracker:
 
         # Create plot
         print("Creating gradient norm plot...")
-        steps = np.arange(args.num_sampling_steps - 1)
+        steps = np.arange(0, args.num_sampling_steps)
         gradient_means = np.array(gradient_means)
         gradient_stds = np.array(gradient_stds)
 

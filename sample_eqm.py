@@ -77,7 +77,7 @@ def main(args):
 
     # Create hooks
     hooks = []
-
+    save_steps_list = []
     if args.save_steps is not None:
         save_steps_list = [int(s.strip()) for s in args.save_steps.split(',')]
         img_saver = IntermediateImageSaver(save_steps_list, args.out)
@@ -93,7 +93,6 @@ def main(args):
     # Sampling loop
     print(f"Starting sampling with {args.sampler.upper()} sampler...")
     total_saved = 0
-
     for i in tqdm(range(iterations), desc="Generating samples"):
         # Generate samples for this batch
         samples = sample_eqm(
@@ -109,14 +108,13 @@ def main(args):
             mu=args.mu,
             hooks=hooks
         )
-
+        
         # Save final samples
         for i_sample, sample in enumerate(samples):
             index = total_saved + i_sample
             Image.fromarray(sample).save(f"{final_step_folder}/{index:06d}.png")
 
         total_saved += args.batch_size
-
     print(f"Saved {total_saved} samples to {final_step_folder}")
 
     # Finalize gradient norm statistics if enabled
