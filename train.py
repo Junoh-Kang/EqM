@@ -286,7 +286,8 @@ def main(args):
             # Generate and log samples:
             if train_steps % args.sample_every == 0 and train_steps > 0:
                 
-                if accelerator.is_main_process:    
+                if accelerator.is_main_process:
+                    
                     logger.info(f"Generating samples for visualization...")
 
                     # Setup hooks
@@ -303,13 +304,22 @@ def main(args):
                     grad_tracker = GradientNormTracker(sampling_steps)
                     hooks = [wandb_image_logger, grad_tracker]
                     
+                    # Fixed initial latent and class labels for consistent comparison
+                    batch_size = 36
+                    latent_size = args.image_size // 8
+                    torch.manual_seed(args.global_seed)  # Use same seed for reproducibility
+                    fixed_initial_latent = torch.randn(batch_size, 4, latent_size, latent_size, device=device)
+                    fixed_class_labels = torch.arange(0, batch_size, device=device) % 1000  # Classes 0-35
+                    
                     # Generate samples
                     samples = sample_eqm(
                         model=ema,
                         vae=vae,
                         device=device,
-                        batch_size=36,
-                        latent_size=args.image_size // 8,
+                        batch_size=batch_size,
+                        latent_size=latent_size,
+                        initial_latent=fixed_initial_latent,
+                        class_labels=fixed_class_labels,
                         num_sampling_steps=sampling_steps,
                         stepsize=0.0017,
                         cfg_scale=args.cfg_scale,
