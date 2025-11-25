@@ -41,6 +41,10 @@ from sampling_utils import (
     GradientNormTracker,
 )
 import wandb
+try:
+    import yaml
+except ImportError:
+    yaml = None
 ################################################################################
 #                             Training Helper Functions                         #
 ################################################################################
@@ -104,6 +108,29 @@ def center_crop_arr(pil_image, image_size):
     crop_x = (arr.shape[1] - image_size) // 2
     return Image.fromarray(arr[crop_y: crop_y + image_size, crop_x: crop_x + image_size])
 
+def save_config_yaml(args, output_path, logger=None):
+    """
+    Convert the argparse Namespace into a YAML (with plaintext fallback) file.
+    """
+    config_dict = wandb_utils.namespace_to_dict(args)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if yaml is not None:
+        with output_path.open("w") as f:
+            yaml.safe_dump(config_dict, f, sort_keys=False)
+        message = f"Saved config to {output_path}"
+    else:
+        with output_path.open("w") as f:
+            for key, value in config_dict.items():
+                f.write(f"{key}: {value}\n")
+        message = (
+            f"Saved config to {output_path} (plain text fallback; install PyYAML for YAML)."
+        )
+
+    if logger is not None:
+        logger.info(message)
+
 
 ################################################################################
 #                                  Training Loop                                #
@@ -156,6 +183,7 @@ def main(args):
         os.makedirs(sample_dir, exist_ok=True)
         logger = create_logger(experiment_dir)
         logger.info(f"Experiment directory created at {experiment_dir}")
+        save_config_yaml(args, f"{experiment_dir}/config.yaml", logger)
 
         if args.wandb:
             entity = os.environ.get("ENTITY", "junohwandb")
@@ -163,6 +191,24 @@ def main(args):
             wandb_utils.initialize(args, entity, experiment_name, project)
     else:
         logger = create_logger(None)
+
+    # Setup dataloader:
+    transform = transforms.Compose([
+        transforms.Lambda(lambda pil_image: center_crop_arr(pil_image, args.image_size)),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
+    ])
+    dataset = ImageFolder(args.data_path, transform=transform)
+    loader = DataLoader(
+        dataset,
+        batch_size=local_batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        drop_last=True
+    )
+    logger.info(f"Dataset contains {len(dataset):,} images ({args.data_path})")
 
     # Create model:
     assert args.image_size % 8 == 0, "Image size must be divisible by 8 (for the VAE encoder)."
@@ -179,6 +225,9 @@ def main(args):
     opt = torch.optim.AdamW(
         model.parameters(), lr=args.lr, weight_decay=args.adam_weigth_decay)
 
+    # Resume training state (only if --resume is set)
+    resume_step = 0
+    start_epoch = 0
     if args.ckpt is not None:
         ckpt_path = args.ckpt
         state_dict = find_model(ckpt_path)
@@ -186,7 +235,27 @@ def main(args):
             model.load_state_dict(state_dict["model"])
             ema.load_state_dict(state_dict["ema"])
             opt.load_state_dict(state_dict["opt"])
+            
+            # Resume training state only if --resume is set
+            if args.resume:
+                if 'train_steps' in state_dict:
+                    resume_step = state_dict['train_steps']
+                    logger.info(f"Resuming training from step {resume_step}")
+                else:
+                    # Try to parse step from checkpoint filename (e.g., "0050000.pt" -> 50000)
+                    filename = os.path.basename(ckpt_path)
+                    resume_step = int(filename.replace('.pt', ''))
+                    logger.info(f"Resuming training from step {resume_step} (parsed from filename)")
+
+                if 'epoch' in state_dict:
+                    start_epoch = state_dict['epoch'] + 1
+                    logger.info(f"Resuming from epoch {start_epoch}")
+                else:
+                    steps_per_epoch = len(dataset) // args.global_batch_size
+                    start_epoch = resume_step // steps_per_epoch
+                    logger.info(f"Calculated start_epoch={start_epoch} from resume_step={resume_step} (steps_per_epoch={steps_per_epoch})")
         else:
+            logger.info(f"Loading checkpoint weights only (not resuming training state)")
             model.load_state_dict(state_dict)
             ema.load_state_dict(state_dict)
 
@@ -206,24 +275,6 @@ def main(args):
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
     logger.info(f"EqM Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
-    # Setup data:
-    transform = transforms.Compose([
-        transforms.Lambda(lambda pil_image: center_crop_arr(pil_image, args.image_size)),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
-    ])
-    dataset = ImageFolder(args.data_path, transform=transform)
-    loader = DataLoader(
-        dataset,
-        batch_size=local_batch_size,
-        shuffle=True,
-        num_workers=args.num_workers,
-        pin_memory=True,
-        drop_last=True
-    )
-    logger.info(f"Dataset contains {len(dataset):,} images ({args.data_path})")
-
     # Prepare models for training:
     update_ema(ema, model, decay=0)  # EMA is initialized with synced weights
     model.train()  # Enables embedding dropout for classifier-free guidance
@@ -232,13 +283,13 @@ def main(args):
     model, opt, loader = accelerator.prepare(model, opt, loader)
 
     # Variables for monitoring/logging purposes:
-    train_steps = 0
+    train_steps = resume_step
     log_steps = 0
     running_loss = 0
     start_time = time()
     
     logger.info(f"Training for {args.epochs} epochs...")
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         logger.info(f"Beginning epoch {epoch}...")
         for x, y in loader:
 
@@ -275,7 +326,7 @@ def main(args):
                 logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
                 if args.wandb and accelerator.is_main_process:
                     wandb_utils.log(
-                        { "train loss": avg_loss, "train steps/sec": steps_per_sec },
+                        {"train loss": avg_loss, "train steps per second": steps_per_sec },
                         step=train_steps
                     )
                 # Reset monitoring variables:
@@ -285,11 +336,8 @@ def main(args):
 
             # Generate and log samples:
             if train_steps % args.sample_every == 0 and train_steps > 0:
-                
                 if accelerator.is_main_process:
-                    
                     logger.info(f"Generating samples for visualization...")
-
                     # Setup hooks
                     save_steps_list = [args.num_sampling_steps//2, args.num_sampling_steps]
                     wandb_image_logger = WandBImageLogger(
@@ -308,7 +356,7 @@ def main(args):
                     class_labels = torch.randint(0, args.num_classes, (args.num_samples,), device=device)
                     
                     # Generate samples
-                    samples = sample_eqm(
+                    sample_eqm(
                         model=ema,
                         vae=vae,
                         device=device,
@@ -325,7 +373,10 @@ def main(args):
 
                     # Finalize WandB logging
                     wandb_image_logger.finalize()
-                    
+                    grad_tracker.finalize_for_wandb(
+                        wandb_module=wandb if args.wandb else None, 
+                        train_step=train_steps,
+                    )
                     logger.info(f"Samples logged to WandB at step {train_steps}")
                 accelerator.wait_for_everyone()
 
@@ -336,6 +387,8 @@ def main(args):
                         "model": accelerator.unwrap_model(model).state_dict(),
                         "ema": ema.state_dict(),
                         "opt": opt.state_dict(),
+                        "train_steps": train_steps,
+                        "epoch": epoch,
                         "args": args
                     }
                     checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
@@ -373,6 +426,8 @@ if __name__ == "__main__":
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--ckpt", type=str, default=None,
                         help="Optional path to a custom EqM checkpoint")
+    parser.add_argument("--resume", action="store_true",
+                        help="Toggle to enable resume")
     parser.add_argument("--disp", action="store_true",
                         help="Toggle to enable Dispersive Loss")
     parser.add_argument("--uncond", type=bool, default=True,

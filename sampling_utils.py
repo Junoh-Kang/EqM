@@ -697,6 +697,56 @@ class GradientNormTracker:
         print(f"Saved gradient norm plot to {plot_path}")
         plt.close()
 
+    def finalize_for_wandb(self, wandb_module, train_step):
+        """
+        Log gradient norm statistics to WandB.
+        Call this after all sampling is complete.
+        
+        Args:
+            wandb_module: wandb module for logging
+            train_step: Current training step for WandB logging
+        """
+        if wandb_module is None:
+            return
+        
+        # Compute statistics
+        gradient_means = []
+        gradient_stds = []
+        
+        for step_norms in self.gradient_norms:
+            if len(step_norms) > 0:
+                gradient_means.append(np.mean(step_norms))
+                gradient_stds.append(np.std(step_norms))
+            else:
+                gradient_means.append(0.0)
+                gradient_stds.append(0.0)
+        
+        # Create a table for gradient norms vs sampling steps
+        # This allows WandB to plot with sampling_step on x-axis
+        data = []
+        for sampling_step, (mean_norm, std_norm) in enumerate(zip(gradient_means, gradient_stds)):
+            data.append([
+                sampling_step, 
+                mean_norm, 
+                std_norm, 
+                mean_norm + std_norm,  # Upper bound
+                mean_norm - std_norm,  # Lower bound
+            ])
+        
+        table = wandb_module.Table(
+            columns=[
+                "sampling_step", 
+                "gradient_norm_mean", 
+                "gradient_norm_std", 
+                "gradient_norm_upper",
+                "gradient_norm_lower",
+            ],
+            data=data
+        )
+        # Log the table with a consistent key (train_step is already in the table data)
+        wandb_module.log({"gradient_norms": table}, step=train_step)
+
+
 
 def create_npz_from_sample_folder(sample_dir, num):
     """
