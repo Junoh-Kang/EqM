@@ -8,7 +8,7 @@ import torch
 # the first flag below was False when we tested this script but True makes A100 training a lot faster:
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from torchvision.datasets import ImageFolder
 from torchvision import transforms
 import numpy as np
@@ -23,11 +23,16 @@ from models import EqM_models
 from download import find_model
 from transport import create_transport
 from diffusers.models import AutoencoderKL
-from train_utils import parse_transport_args, parse_sample_args
 import wandb_utils
 from torchvision import transforms
 from pathlib import Path
 from accelerate import Accelerator
+
+from train_utils import (
+    parse_transport_args,
+    parse_sample_args,
+)
+from utils import imagenet_label_from_idx
 from sampling_utils import (
     sample_eqm,
     WandBImageLogger,
@@ -197,6 +202,19 @@ def main(args):
         transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
     ])
     dataset = ImageFolder(args.data_path, transform=transform)
+
+    if args.single_class_idx is not None:
+        target_idx = args.single_class_idx
+        keep_indices = [i for i, (_, label) in enumerate(dataset.samples) if label == target_idx]
+        assert len(keep_indices) > 0, f"No samples found for class index {target_idx}; check the dataset paths."
+        class_name = dataset.classes[target_idx]
+        human_label = imagenet_label_from_idx(target_idx)
+        label_desc = f"class idx {target_idx} ({class_name}, {human_label})"
+        dataset = Subset(dataset, keep_indices)
+        logger.info(
+            f"Filtering dataset to {label_desc} with {len(keep_indices):,} samples."
+        )
+
     loader = DataLoader(
         dataset,
         batch_size=local_batch_size,
@@ -350,6 +368,8 @@ def main(args):
                     torch.manual_seed(args.global_seed)  # Use same seed for reproducibility
                     initial_latent = torch.randn(args.num_samples, 4, latent_size, latent_size, device=device)
                     class_labels = torch.randint(0, args.num_classes, (args.num_samples,), device=device)
+                    if args.single_class_idx is not None:
+                        class_labels.fill_(args.single_class_idx)
                     
                     # Generate samples
                     sample_eqm(
@@ -426,6 +446,8 @@ if __name__ == "__main__":
     group.add_argument("--ckpt", type=str, default=None, help="Optional path to a custom EqM checkpoint")
     group.add_argument("--resume", action="store_true", help="Toggle to enable resume")
     group.add_argument("--disp", action="store_true", help="Toggle to enable Dispersive Loss")
+    group.add_argument("--single-class-idx", type=int, default=None,
+                       help="Optional ImageFolder class index to restrict training to")
     parse_transport_args(parser)
     parse_sample_args(parser)
 

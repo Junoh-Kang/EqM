@@ -2,8 +2,21 @@ import numpy as np
 import torch
 from typing import List, Union, Optional, Tuple
 from PIL import Image
+try:
+    from torchvision.models._meta import _IMAGENET_CATEGORIES as _IMAGENET_CATEGORIES
+except ImportError:
+    _IMAGENET_CATEGORIES = None
 
 
+def imagenet_label_from_idx(class_idx: int):
+    """
+    Return the human-readable ImageNet label for a given class index.
+    """
+    if _IMAGENET_CATEGORIES is None:
+        return None
+    if class_idx < 0 or class_idx >= len(_IMAGENET_CATEGORIES):
+        return None
+    return _IMAGENET_CATEGORIES[class_idx]
 
 
 ArrayLike = Union[np.ndarray, torch.Tensor, Image.Image]
@@ -161,6 +174,3 @@ def fft_image(images):
             high_freq_ratio = 0.0
 
         high_freq_metrics.append(high_freq_ratio)
-
-def fft_latent():
-    pass
