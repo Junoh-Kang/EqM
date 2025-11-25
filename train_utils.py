@@ -35,7 +35,7 @@ def parse_sde_args(parser):
 
 def parse_sample_args(parser):
     group = parser.add_argument_group("Sampling arguments")
-    group.add_argument("--num-samples", type=int, default=36)
+    group.add_argument("--num-samples", type=int, default=32)
     group.add_argument("--cfg-scale", type=float, default=4.0)
     group.add_argument("--num-sampling-steps", type=int, default=500)
     group.add_argument("--stepsize", type=float, default=0.0017)

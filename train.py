@@ -169,13 +169,13 @@ def main(args):
     # Setup an experiment folder:
     if accelerator.is_main_process:
         
-        os.makedirs(f"training_log/{args.project}", exist_ok=True)  # Make results folder (holds all experiment subfolders)
-        
+        os.makedirs(f"_trained/{args.project}", exist_ok=True)  # Make results folder (holds all experiment subfolders)
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         model_string_name = args.model.replace("/", "-")  # e.g., SiT-XL/2 --> SiT-XL-2 (for naming folders)
-        experiment_name = f"{timestamp}-{model_string_name}-{args.uncond}-{args.const_type}"
-        experiment_dir = f"training_log/{args.project}/{experiment_name}"  
+        condition = "uncond" if args.uncond else "cond"
+        experiment_name = f"{timestamp}-{model_string_name}-{condition}-{args.const_type}"
+        experiment_dir = f"_trained/{args.project}/{experiment_name}"  
         checkpoint_dir = f"{experiment_dir}/checkpoints"
         os.makedirs(checkpoint_dir, exist_ok=True)
         sample_dir = f"{experiment_dir}/samples"
@@ -422,17 +422,22 @@ if __name__ == "__main__":
     # Default args here will train EqM-XL/2 with the hyperparameters we used in our paper (except training iters).
     parser = argparse.ArgumentParser()
     
-    parser.add_argument("--data-path", type=str, required=True)
-    
-
-    # Model arguments
-    group = parser.add_argument_group("Model arguments")
-    group.add_argument("--model", type=str, choices=list(EqM_models.keys()), default="EqM-XL/2")
-    group.add_argument("--vae", type=str, choices=["ema", "mse"], default="ema")
+    # Dataset argument
+    group = parser.add_argument_group("Dataset argument")
+    group.add_argument("--data-path", type=str, required=True)
+    group.add_argument("--single-class-idx", type=int, default=None)
     group.add_argument("--image-size", type=int, choices=[256, 512], default=256)
     group.add_argument("--num-classes", type=int, default=1000)
-    group.add_argument("--uncond", type=bool, default=True, 
-                        help="disable/enable noise conditioning")
+    
+    # Model arguments
+    group = parser.add_argument_group("Model arguments")
+    group.add_argument("--vae", type=str, choices=["ema", "mse"], default="ema")
+    group.add_argument("--model", type=str, choices=list(EqM_models.keys()), default="EqM-XL/2")
+    group.add_argument("--uncond", 
+        action=argparse.BooleanOptionalAction, 
+        default=True,
+        help="disable/enable noise conditioning",
+    )
     group.add_argument("--ebm", type=str, choices=["none", "l2", "dot", "mean"], default="none",
                         help="energy formulation")
 
@@ -446,8 +451,7 @@ if __name__ == "__main__":
     group.add_argument("--ckpt", type=str, default=None, help="Optional path to a custom EqM checkpoint")
     group.add_argument("--resume", action="store_true", help="Toggle to enable resume")
     group.add_argument("--disp", action="store_true", help="Toggle to enable Dispersive Loss")
-    group.add_argument("--single-class-idx", type=int, default=None,
-                       help="Optional ImageFolder class index to restrict training to")
+    
     parse_transport_args(parser)
     parse_sample_args(parser)
 
