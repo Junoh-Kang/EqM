@@ -31,3 +31,20 @@ def parse_sde_args(parser):
                         help="form of last step taken in the SDE")
     group.add_argument("--last-step-size", type=float, default=0.04, \
                         help="size of the last step taken")
+
+
+    # Generate samples
+
+    samples = sample_eqm(
+        model=ema_model,
+        vae=vae,
+        device=device,
+        batch_size=args.num_vis_samples,
+        latent_size=latent_size,
+        num_sampling_steps=250,
+        stepsize=0.0017,
+        cfg_scale=args.cfg_scale if hasattr(args, 'cfg_scale') else 4.0,
+        sampler='gd',
+        mu=0.3,
+        hooks=[]
+    )

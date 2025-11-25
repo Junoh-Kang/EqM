@@ -2,13 +2,16 @@
 # LICENSE file in the root directory of this source tree.
 
 """
-A minimal training script for EqM using Hugging Face Accelerate.
+A minimal training script for EqM using PyTorch DDP.
 """
 import torch
 # the first flag below was False when we tested this script but True makes A100 training a lot faster:
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from torchvision.datasets import ImageFolder
 from torchvision import transforms
 import numpy as np
@@ -34,16 +37,10 @@ import torchvision.transforms.functional as TF
 from torchvision.transforms.functional import to_pil_image
 from pathlib import Path
 import torch.nn.functional as F
-from accelerate import Accelerator
-from sampling_utils import (
-    sample_eqm,
-    WandBImageLogger,
-    GradientNormTracker,
-)
-import wandb
-################################################################################
+
+#################################################################################
 #                             Training Helper Functions                         #
-################################################################################
+#################################################################################
 
 @torch.no_grad()
 def update_ema(ema_model, model, decay=0.9999):
@@ -66,11 +63,18 @@ def requires_grad(model, flag=True):
         p.requires_grad = flag
 
 
+def cleanup():
+    """
+    End DDP training.
+    """
+    dist.destroy_process_group()
+
+
 def create_logger(logging_dir):
     """
     Create a logger that writes to a log file and stdout.
     """
-    if logging_dir:  # real logger
+    if dist.get_rank() == 0:  # real logger
         logging.basicConfig(
             level=logging.INFO,
             format='[\033[34m%(asctime)s\033[0m] %(message)s',
@@ -105,61 +109,55 @@ def center_crop_arr(pil_image, image_size):
     return Image.fromarray(arr[crop_y: crop_y + image_size, crop_x: crop_x + image_size])
 
 
-################################################################################
+#################################################################################
 #                                  Training Loop                                #
-################################################################################
+#################################################################################
 
 def main(args):
     """
     Trains a new EqM model.
     """
-    # Set up accelerator
-    accelerator = Accelerator()
-    device = accelerator.device
+    assert torch.cuda.is_available(), "Training currently requires at least one GPU."
+    n_gpus = torch.cuda.device_count()
     
-    assert args.global_batch_size % accelerator.num_processes == 0, \
-        f"Batch size must be divisible by world size."
-    local_batch_size = int(args.global_batch_size // accelerator.num_processes)
-    
-    accelerator.print(
-        f"Found {accelerator.num_processes} processes, " \
-        f"trying to use device {device}. "
-    )
-
-    rank = accelerator.process_index
-    seed = args.global_seed * accelerator.num_processes + rank
-    torch.manual_seed(seed)
-    accelerator.print(
-        f"Starting rank={rank}, seed={seed}, " \
-        f"local_batch_size={local_batch_size}." \
-    )
-
     # disable flash for energy training
     if args.ebm != 'none':
         torch.backends.cuda.enable_flash_sdp(False)
         torch.backends.cuda.enable_mem_efficient_sdp(False)
         torch.backends.cuda.enable_cudnn_sdp(False)
         torch.backends.cuda.enable_math_sdp(True)
+    
+    # Setup DDP:
+    dist.init_process_group("nccl")
+    assert args.global_batch_size % dist.get_world_size() == 0, f"Batch size must be divisible by world size."
+    rank = dist.get_rank()
+    device = int(os.environ["LOCAL_RANK"])
+    print(f"Found {n_gpus} GPUs, trying to use device index {device}")
+    seed = args.global_seed * dist.get_world_size() + rank
+    torch.manual_seed(seed)
+    torch.cuda.set_device(device)
+    print(f"Starting rank={rank}, seed={seed}, world_size={dist.get_world_size()}.")
+    local_batch_size = int(args.global_batch_size // dist.get_world_size())
 
     # Setup an experiment folder:
-    if accelerator.is_main_process:
+    if rank == 0:
         os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
         
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         model_string_name = args.model.replace("/", "-")  # e.g., SiT-XL/2 --> SiT-XL-2 (for naming folders)
         experiment_name = f"{timestamp}-{model_string_name}-{args.uncond}-{args.const_type}"
-        experiment_dir = f"{args.results_dir}/{experiment_name}"  
-        checkpoint_dir = f"{experiment_dir}/checkpoints"
+        # experiment_name = f"{experiment_index:03d}-{model_string_name}-" \
+                        # f"{args.path_type}-{args.prediction}-{args.loss_weight}-{args.uncond}-{args.const_type}"
+        experiment_dir = f"{args.results_dir}/{experiment_name}"  # Create an experiment folder
+        checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
         os.makedirs(checkpoint_dir, exist_ok=True)
-        sample_dir = f"{experiment_dir}/samples"
-        os.makedirs(sample_dir, exist_ok=True)
         logger = create_logger(experiment_dir)
         logger.info(f"Experiment directory created at {experiment_dir}")
 
+        entity = os.environ["ENTITY"]
+        project = os.environ["PROJECT"]
         if args.wandb:
-            entity = os.environ.get("ENTITY", "junohwandb")
-            project = os.environ.get("PROJECT", "EqM-debug")
             wandb_utils.initialize(args, entity, experiment_name, project)
     else:
         logger = create_logger(None)
@@ -176,8 +174,7 @@ def main(args):
 
     # Note that parameter initialization is done within the EqM constructor
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
-    opt = torch.optim.AdamW(
-        model.parameters(), lr=args.lr, weight_decay=args.adam_weigth_decay)
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
 
     if args.ckpt is not None:
         ckpt_path = args.ckpt
@@ -193,7 +190,7 @@ def main(args):
         ema = ema.to(device)
         model = model.to(device)
     requires_grad(ema, False)
-    
+    model = DDP(model, device_ids=[device])
     transport = create_transport(
         args.path_type,
         args.prediction,
@@ -206,6 +203,8 @@ def main(args):
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
     logger.info(f"EqM Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
+    # Setup optimizer (we used default Adam betas=(0.9, 0.999) and a constant learning rate of 1e-4 in our paper):
+
     # Setup data:
     transform = transforms.Compose([
         transforms.Lambda(lambda pil_image: center_crop_arr(pil_image, args.image_size)),
@@ -214,10 +213,18 @@ def main(args):
         transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
     ])
     dataset = ImageFolder(args.data_path, transform=transform)
+    sampler = DistributedSampler(
+        dataset,
+        num_replicas=dist.get_world_size(),
+        rank=rank,
+        shuffle=True,
+        seed=args.global_seed
+    )
     loader = DataLoader(
         dataset,
         batch_size=local_batch_size,
-        shuffle=True,
+        shuffle=False,
+        sampler=sampler,
         num_workers=args.num_workers,
         pin_memory=True,
         drop_last=True
@@ -225,11 +232,9 @@ def main(args):
     logger.info(f"Dataset contains {len(dataset):,} images ({args.data_path})")
 
     # Prepare models for training:
-    update_ema(ema, model, decay=0)  # EMA is initialized with synced weights
-    model.train()  # Enables embedding dropout for classifier-free guidance
+    update_ema(ema, model.module, decay=0)  # Ensure EMA is initialized with synced weights
+    model.train()  # important! This enables embedding dropout for classifier-free guidance
     ema.eval()  # EMA model should always be in eval mode
-
-    model, opt, loader = accelerator.prepare(model, opt, loader)
 
     # Variables for monitoring/logging purposes:
     train_steps = 0
@@ -239,26 +244,22 @@ def main(args):
     
     logger.info(f"Training for {args.epochs} epochs...")
     for epoch in range(args.epochs):
+        sampler.set_epoch(epoch)
         logger.info(f"Beginning epoch {epoch}...")
         for x, y in loader:
-
-            opt.zero_grad()
-
             x = x.to(device)
             y = y.to(device)
             with torch.no_grad():
                 # Map input images to latent space + normalize latents:
                 x = vae.encode(x).latent_dist.sample().mul_(0.18215)
             model_kwargs = dict(y=y, return_act=args.disp, train=True)
-
             loss_dict = transport.training_losses(model, x, model_kwargs)
             loss = loss_dict["loss"].mean()
-            accelerator.backward(loss)
-
+            opt.zero_grad()
+            loss.backward()
             opt.step()
-            
-            update_ema(ema, model.module if hasattr(model, 'module') else model)
-            
+            update_ema(ema, model.module)
+
             # Log loss values:
             running_loss += loss.item()
             log_steps += 1
@@ -270,10 +271,10 @@ def main(args):
                 steps_per_sec = log_steps / (end_time - start_time)
                 # Reduce loss history over all processes:
                 avg_loss = torch.tensor(running_loss / log_steps, device=device)
-                avg_loss = accelerator.gather(avg_loss).mean().item()
-                
+                dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
+                avg_loss = avg_loss.item() / dist.get_world_size()
                 logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
-                if args.wandb and accelerator.is_main_process:
+                if args.wandb:
                     wandb_utils.log(
                         { "train loss": avg_loss, "train steps/sec": steps_per_sec },
                         step=train_steps
@@ -283,50 +284,11 @@ def main(args):
                 log_steps = 0
                 start_time = time()
 
-            # Generate and log samples:
-            if train_steps % args.sample_every == 0 and train_steps > 0:
-                
-                if accelerator.is_main_process:    
-                    logger.info(f"Generating samples for visualization...")
-
-                    # Setup hooks
-                    sampling_steps = 10
-                    save_steps_list = [sampling_steps//2, sampling_steps]
-                    
-                    # WandB logger hook
-                    wandb_image_logger = WandBImageLogger(
-                        save_steps=save_steps_list,
-                        train_step=train_steps,
-                        output_folder=sample_dir,
-                        wandb_module=wandb if args.wandb else None
-                    )                    
-                    grad_tracker = GradientNormTracker(sampling_steps)
-                    hooks = [wandb_image_logger, grad_tracker]
-                    
-                    # Generate samples
-                    samples = sample_eqm(
-                        model=ema,
-                        vae=vae,
-                        device=device,
-                        batch_size=36,
-                        latent_size=args.image_size // 8,
-                        num_sampling_steps=sampling_steps,
-                        stepsize=0.0017,
-                        cfg_scale=args.cfg_scale,
-                        hooks=hooks
-                    )
-
-                    # Finalize WandB logging
-                    wandb_image_logger.finalize()
-                    
-                    logger.info(f"Samples logged to WandB at step {train_steps}")
-                accelerator.wait_for_everyone()
-
             # Save EqM checkpoint:
             if train_steps % args.ckpt_every == 0 and train_steps > 0:
-                if accelerator.is_main_process:
+                if rank == 0:
                     checkpoint = {
-                        "model": accelerator.unwrap_model(model).state_dict(),
+                        "model": model.module.state_dict(),
                         "ema": ema.state_dict(),
                         "opt": opt.state_dict(),
                         "args": args
@@ -334,14 +296,13 @@ def main(args):
                     checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
                     torch.save(checkpoint, checkpoint_path)
                     logger.info(f"Saved checkpoint to {checkpoint_path}")
-                accelerator.wait_for_everyone()
-            
-            
+                dist.barrier()
                 
     model.eval()  # important! This disables randomized embedding dropout
     # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
 
     logger.info("Done!")
+    cleanup()
 
 
 if __name__ == "__main__":
@@ -355,17 +316,11 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--global-batch-size", type=int, default=256)
     parser.add_argument("--global-seed", type=int, default=0)
-    parser.add_argument("--vae", type=str, choices=["ema", "mse"], default="ema")  
-    
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--adam-weigth-decay", type=float, default=0)
-    
-    # Choice doesn't affect training
+    parser.add_argument("--vae", type=str, choices=["ema", "mse"], default="ema")  # Choice doesn't affect training
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--log-every", type=int, default=100)
-    parser.add_argument("--sample-every", type=int, default=10000)
-    parser.add_argument("--cfg-scale", type=float, default=4.0)
     parser.add_argument("--ckpt-every", type=int, default=50000)
+    parser.add_argument("--cfg-scale", type=float, default=4.0)
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--ckpt", type=str, default=None,
                         help="Optional path to a custom EqM checkpoint")
@@ -375,6 +330,7 @@ if __name__ == "__main__":
                         help="disable/enable noise conditioning")
     parser.add_argument("--ebm", type=str, choices=["none", "l2", "dot", "mean"], default="none",
                         help="energy formulation")
+
     parse_transport_args(parser)
     args = parser.parse_args()
     main(args)

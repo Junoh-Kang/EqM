@@ -357,6 +357,7 @@ class IntermediateImageSaver:
         self.output_folder = output_folder
         # Track global sample counter for each step to avoid overwriting
         self.step_counters = {step: 0 for step in save_steps}
+        # self.return_images = return_images
 
     def __call__(self, context: SamplingHookContext):
         """Save images if current step is in save_steps list."""
@@ -382,6 +383,66 @@ class IntermediateImageSaver:
 
         # Update counter for this step
         self.step_counters[context.step_idx] += len(samples)
+
+
+class WandBImageLogger:
+    """
+    Hook for logging intermediate images during sampling directly to WandB.
+    
+    Args:
+        save_steps: List of step indices at which to log images (e.g., [5, 10, 250])
+        train_step: Current training step (for WandB logging)
+        output_folder: Folder to save logged images
+        wandb_module: wandb module (pass wandb if imported, or None to skip logging)
+    """
+    
+    def __init__(self, save_steps, train_step, output_folder,wandb_module=None):
+        self.save_steps = set(save_steps)
+        self.train_step = train_step
+        self.output_folder = output_folder
+        self.wandb = wandb_module
+        self.logged_images = {step: [] for step in save_steps}
+        self.step_counters = {step: 0 for step in save_steps}
+        
+
+    def __call__(self, context: SamplingHookContext):
+        """Log images to WandB if current step is in save_steps list."""
+        if context.step_idx not in self.save_steps or self.wandb is None:
+            return
+        
+        folder = f"{self.output_folder}/train_{self.train_step:04d}/sample_{context.step_idx:03d}"
+        os.makedirs(folder, exist_ok=True)
+
+        # Extract conditional part if using CFG
+        xt_save = context.xt
+        if context.use_cfg:
+            batch_size = context.xt.shape[0] // 2
+            xt_save = context.xt[:batch_size]
+        
+        # Decode latents to images
+        samples = decode_latents(context.vae, xt_save)
+        
+        # Convert to wandb.Image objects
+        start_idx = self.step_counters[context.step_idx]
+        for i_sample, sample in enumerate(samples):
+            global_idx = start_idx + i_sample
+            img = Image.fromarray(sample)
+            img.save(f"{folder}/{global_idx:03d}.png")
+            self.logged_images[context.step_idx].append(
+                self.wandb.Image(img, caption=f"Sample {global_idx:03d}")
+            )
+    
+    def finalize(self):
+        """Log all collected images to WandB. Call this after sampling is complete."""
+        if self.wandb is None:
+            return
+        
+        for step_idx in sorted(self.save_steps):
+            if len(self.logged_images[step_idx]) > 0:
+                self.wandb.log({
+                    f"samples/step_{step_idx:03d}": self.logged_images[step_idx]
+                }, 
+                step=self.train_step)
 
 
 class DistortionTracker:
