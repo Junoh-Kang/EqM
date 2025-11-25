@@ -25,7 +25,7 @@ from models import EqM_models
 from download import find_model
 from transport import create_transport, Sampler
 from diffusers.models import AutoencoderKL
-from train_utils import parse_transport_args
+from train_utils import parse_transport_args, parse_sample_args
 import wandb_utils
 from torchvision import datasets, transforms, models
 import matplotlib.pyplot as plt
@@ -291,38 +291,35 @@ def main(args):
                     logger.info(f"Generating samples for visualization...")
 
                     # Setup hooks
-                    sampling_steps = 10
-                    save_steps_list = [sampling_steps//2, sampling_steps]
-                    
-                    # WandB logger hook
+                    save_steps_list = [args.num_sampling_steps//2, args.num_sampling_steps]
                     wandb_image_logger = WandBImageLogger(
                         save_steps=save_steps_list,
                         train_step=train_steps,
                         output_folder=sample_dir,
                         wandb_module=wandb if args.wandb else None
                     )                    
-                    grad_tracker = GradientNormTracker(sampling_steps)
+                    grad_tracker = GradientNormTracker(args.num_sampling_steps)
                     hooks = [wandb_image_logger, grad_tracker]
                     
                     # Fixed initial latent and class labels for consistent comparison
-                    batch_size = 36
                     latent_size = args.image_size // 8
                     torch.manual_seed(args.global_seed)  # Use same seed for reproducibility
-                    fixed_initial_latent = torch.randn(batch_size, 4, latent_size, latent_size, device=device)
-                    fixed_class_labels = torch.arange(0, batch_size, device=device) % 1000  # Classes 0-35
+                    initial_latent = torch.randn(args.num_samples, 4, latent_size, latent_size, device=device)
+                    class_labels = torch.randint(0, args.num_classes, (args.num_samples,), device=device)
                     
                     # Generate samples
                     samples = sample_eqm(
                         model=ema,
                         vae=vae,
                         device=device,
-                        batch_size=batch_size,
+                        batch_size=args.num_samples,
                         latent_size=latent_size,
-                        initial_latent=fixed_initial_latent,
-                        class_labels=fixed_class_labels,
-                        num_sampling_steps=sampling_steps,
-                        stepsize=0.0017,
+                        initial_latent=initial_latent,
+                        class_labels=class_labels,
+                        num_sampling_steps=args.num_sampling_steps,
+                        stepsize=args.stepsize,
                         cfg_scale=args.cfg_scale,
+                        sampler=args.sampler,
                         hooks=hooks
                     )
 
@@ -345,8 +342,6 @@ def main(args):
                     torch.save(checkpoint, checkpoint_path)
                     logger.info(f"Saved checkpoint to {checkpoint_path}")
                 accelerator.wait_for_everyone()
-            
-            
                 
     model.eval()  # important! This disables randomized embedding dropout
     # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
@@ -374,7 +369,6 @@ if __name__ == "__main__":
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--sample-every", type=int, default=10000)
-    parser.add_argument("--cfg-scale", type=float, default=4.0)
     parser.add_argument("--ckpt-every", type=int, default=50000)
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--ckpt", type=str, default=None,
@@ -386,5 +380,6 @@ if __name__ == "__main__":
     parser.add_argument("--ebm", type=str, choices=["none", "l2", "dot", "mean"], default="none",
                         help="energy formulation")
     parse_transport_args(parser)
+    parse_sample_args(parser)
     args = parser.parse_args()
     main(args)
