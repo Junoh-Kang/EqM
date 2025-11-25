@@ -48,18 +48,20 @@ class Transport:
         loss_type,
         train_eps,
         sample_eps,
+        const_type,
     ):
         path_options = {
             PathType.LINEAR: path.ICPlan,
             PathType.GVP: path.GVPCPlan,
             PathType.VP: path.VPCPlan,
         }
-
         self.loss_type = loss_type
         self.model_type = model_type
         self.path_sampler = path_options[path_type]()
         self.train_eps = train_eps
         self.sample_eps = sample_eps
+        self.const_type = const_type
+        
 
     def prior_logp(self, z):
         '''
@@ -121,9 +123,15 @@ class Transport:
         return th.log(th.exp(-diff).mean())
 
     def get_ct(self, t): #ct implementation
-        interp = 0.8
-        start = 1.0
-        ct = th.minimum(start-(start-1)/(interp)*t, 1/(1-interp)-1/(1-interp)*t)*4
+        if self.const_type == "truncated":    
+            interp = 0.8
+            start = 1.0
+            ct = th.minimum(start-(start-1)/(interp)*t, 1/(1-interp)-1/(1-interp)*t)*4
+        elif self.const_type == "constant":
+            ct = th.ones_like(t)
+        else:
+            raise NotImplementedError()
+
         return ct
 
     def training_losses(

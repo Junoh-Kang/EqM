@@ -13,9 +13,13 @@ output_131
 .claude/
 CLAUDE.md
 
-scripts
+# Folders 
 .backup_local/
+.vscode/
+scripts/
+results/
+
+# Etc
 fid*
 classify_image_graph_def.pb
-.vscode/
 *.ipynb

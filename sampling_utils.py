@@ -283,7 +283,7 @@ def sample_eqm_two(
                 new_y = []
                 for orig_class in original_y:
                     # 원래 class를 제외한 랜덤 class 선택
-                    available_classes = list(range(args.num_classes))
+                    available_classes = list(range(1000))
                     available_classes.remove(orig_class.item())
                     new_class = np.random.choice(available_classes)
                     new_y.append(new_class)

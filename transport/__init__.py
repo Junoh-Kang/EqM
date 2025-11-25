@@ -6,6 +6,7 @@ def create_transport(
     loss_weight=None,
     train_eps=None,
     sample_eps=None,
+    const_type="truncated",
 ):
     """function for creating Transport object
     **Note**: model prediction defaults to velocity
@@ -17,6 +18,7 @@ def create_transport(
     - likelihood_weighted: weight loss by likelihood weight
     - train_eps: small epsilon for avoiding instability during training
     - sample_eps: small epsilon for avoiding instability during sampling
+    - const_type: type of constant to use; default to truncated
     """
 
     if prediction == "noise":
@@ -58,6 +60,7 @@ def create_transport(
         loss_type=loss_type,
         train_eps=train_eps,
         sample_eps=sample_eps,
+        const_type=const_type,
     )
     
     return state

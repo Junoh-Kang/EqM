@@ -143,7 +143,7 @@ def main(args):
         experiment_index = len(glob(f"{args.results_dir}/*"))
         model_string_name = args.model.replace("/", "-")  # e.g., SiT-XL/2 --> SiT-XL-2 (for naming folders)
         experiment_name = f"{experiment_index:03d}-{model_string_name}-" \
-                        f"{args.path_type}-{args.prediction}-{args.loss_weight}"
+                        f"{args.path_type}-{args.prediction}-{args.loss_weight}-{args.const_type}"
         experiment_dir = f"{args.results_dir}/{experiment_name}"  # Create an experiment folder
         checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
         os.makedirs(checkpoint_dir, exist_ok=True)
@@ -191,7 +191,8 @@ def main(args):
         args.prediction,
         args.loss_weight,
         args.train_eps,
-        args.sample_eps
+        args.sample_eps,
+        args.const_type,
     )  # default: velocity; 
     transport_sampler = Sampler(transport)
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
@@ -235,24 +236,6 @@ def main(args):
     log_steps = 0
     running_loss = 0
     start_time = time()
-
-    # Labels to condition the model with (feel free to change):
-    ys = torch.randint(1000, size=(local_batch_size,), device=device)
-    use_cfg = args.cfg_scale > 1.0
-    # Create sampling noise:
-    n = ys.size(0)
-    zs = torch.randn(n, 4, latent_size, latent_size, device=device)
-
-    # Setup classifier-free guidance:
-    if use_cfg:
-        zs = torch.cat([zs, zs], 0)
-        y_null = torch.tensor([1000] * n, device=device)
-        ys = torch.cat([ys, y_null], 0)
-        sample_model_kwargs = dict(y=ys, cfg_scale=args.cfg_scale)
-        model_fn = ema.forward_with_cfg
-    else:
-        sample_model_kwargs = dict(y=ys)
-        model_fn = ema.forward
     
     logger.info(f"Training for {args.epochs} epochs...")
     for epoch in range(args.epochs):

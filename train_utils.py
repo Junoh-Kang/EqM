@@ -10,7 +10,7 @@ def parse_transport_args(parser):
     group.add_argument("--loss-weight", type=none_or_str, default=None, choices=[None, "velocity", "likelihood"])
     group.add_argument("--sample-eps", type=float)
     group.add_argument("--train-eps", type=float)
-
+    group.add_argument("--const-type", type=str, default="truncated", choices=["truncated", "constant"])
 
 def parse_ode_args(parser):
     group = parser.add_argument_group("ODE arguments")
