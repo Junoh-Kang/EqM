@@ -140,10 +140,13 @@ def main(args):
     # Setup an experiment folder:
     if rank == 0:
         os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
-        experiment_index = len(glob(f"{args.results_dir}/*"))
+        
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         model_string_name = args.model.replace("/", "-")  # e.g., SiT-XL/2 --> SiT-XL-2 (for naming folders)
-        experiment_name = f"{experiment_index:03d}-{model_string_name}-" \
-                        f"{args.path_type}-{args.prediction}-{args.loss_weight}-{args.const_type}"
+        experiment_name = f"{timestamp}-{model_string_name}-{args.uncond}-{args.const_type}"
+        # experiment_name = f"{experiment_index:03d}-{model_string_name}-" \
+                        # f"{args.path_type}-{args.prediction}-{args.loss_weight}-{args.uncond}-{args.const_type}"
         experiment_dir = f"{args.results_dir}/{experiment_name}"  # Create an experiment folder
         checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
         os.makedirs(checkpoint_dir, exist_ok=True)
