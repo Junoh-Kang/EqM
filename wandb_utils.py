@@ -24,7 +24,7 @@ def generate_run_id(exp_name):
     return str(int(hashlib.sha256(exp_name.encode('utf-8')).hexdigest(), 16) % 10 ** 8)
 
 
-def initialize(args, entity, exp_name, project_name):
+def initialize(args, entity, exp_name, project_name, dir):
     config_dict = namespace_to_dict(args)
     wandb.login(key=os.environ["WANDB_KEY"])
     wandb.init(
@@ -34,6 +34,7 @@ def initialize(args, entity, exp_name, project_name):
         config=config_dict,
         id=generate_run_id(exp_name),
         resume="allow",
+        dir=dir
     )
 
 def log(stats, step=None):

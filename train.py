@@ -15,25 +15,18 @@ import numpy as np
 from collections import OrderedDict
 from PIL import Image
 from copy import deepcopy
-from glob import glob
 from time import time
 import argparse
 import logging
 import os
-from tqdm import tqdm
 from models import EqM_models
 from download import find_model
-from transport import create_transport, Sampler
+from transport import create_transport
 from diffusers.models import AutoencoderKL
 from train_utils import parse_transport_args, parse_sample_args
 import wandb_utils
-from torchvision import datasets, transforms, models
-import matplotlib.pyplot as plt
-from sklearn.metrics import roc_auc_score
-import torchvision.transforms.functional as TF
-from torchvision.transforms.functional import to_pil_image
+from torchvision import transforms
 from pathlib import Path
-import torch.nn.functional as F
 from accelerate import Accelerator
 from sampling_utils import (
     sample_eqm,
@@ -170,13 +163,14 @@ def main(args):
 
     # Setup an experiment folder:
     if accelerator.is_main_process:
-        os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
+        
+        os.makedirs(f"training_log/{args.project}", exist_ok=True)  # Make results folder (holds all experiment subfolders)
         
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         model_string_name = args.model.replace("/", "-")  # e.g., SiT-XL/2 --> SiT-XL-2 (for naming folders)
         experiment_name = f"{timestamp}-{model_string_name}-{args.uncond}-{args.const_type}"
-        experiment_dir = f"{args.results_dir}/{experiment_name}"  
+        experiment_dir = f"training_log/{args.project}/{experiment_name}"  
         checkpoint_dir = f"{experiment_dir}/checkpoints"
         os.makedirs(checkpoint_dir, exist_ok=True)
         sample_dir = f"{experiment_dir}/samples"
@@ -188,7 +182,10 @@ def main(args):
         if args.wandb:
             entity = os.environ.get("ENTITY", "junohwandb")
             project = os.environ.get("PROJECT", "EqM-debug")
-            wandb_utils.initialize(args, entity, experiment_name, project)
+            wandb_utils.initialize(
+                args, entity, experiment_name, project,
+                dir=f"{experiment_dir}/wandb"
+            )
     else:
         logger = create_logger(None)
 
@@ -271,7 +268,6 @@ def main(args):
         args.sample_eps,
         args.const_type,
     )  # default: velocity; 
-    transport_sampler = Sampler(transport)
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
     logger.info(f"EqM Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
@@ -387,14 +383,14 @@ def main(args):
                         "model": accelerator.unwrap_model(model).state_dict(),
                         "ema": ema.state_dict(),
                         "opt": opt.state_dict(),
-                        "train_steps": train_steps,
-                        "epoch": epoch,
                         "args": args
                     }
                     checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
                     torch.save(checkpoint, checkpoint_path)
-                    logger.info(f"Saved checkpoint to {checkpoint_path}")
-                accelerator.wait_for_everyone()
+                #FIXME: 나중에 accelerate으로 저장하는게 더 좋을 수 있음.
+                # save_path = f"{checkpoint_dir}/step_{train_steps:07d}"
+                # accelerator.save_state(save_path)
+                # accelerator.wait_for_everyone()
                 
     model.eval()  # important! This disables randomized embedding dropout
     # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
@@ -405,36 +401,44 @@ def main(args):
 if __name__ == "__main__":
     # Default args here will train EqM-XL/2 with the hyperparameters we used in our paper (except training iters).
     parser = argparse.ArgumentParser()
+    
     parser.add_argument("--data-path", type=str, required=True)
-    parser.add_argument("--results-dir", type=str, default="results")
-    parser.add_argument("--model", type=str, choices=list(EqM_models.keys()), default="EqM-XL/2")
-    parser.add_argument("--image-size", type=int, choices=[256, 512], default=256)
-    parser.add_argument("--num-classes", type=int, default=1000)
-    parser.add_argument("--epochs", type=int, default=80)
-    parser.add_argument("--global-batch-size", type=int, default=256)
-    parser.add_argument("--global-seed", type=int, default=0)
-    parser.add_argument("--vae", type=str, choices=["ema", "mse"], default="ema")  
     
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--adam-weigth-decay", type=float, default=0)
-    
-    # Choice doesn't affect training
-    parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--log-every", type=int, default=100)
-    parser.add_argument("--sample-every", type=int, default=10000)
-    parser.add_argument("--ckpt-every", type=int, default=50000)
-    parser.add_argument("--wandb", action="store_true")
-    parser.add_argument("--ckpt", type=str, default=None,
-                        help="Optional path to a custom EqM checkpoint")
-    parser.add_argument("--resume", action="store_true",
-                        help="Toggle to enable resume")
-    parser.add_argument("--disp", action="store_true",
-                        help="Toggle to enable Dispersive Loss")
-    parser.add_argument("--uncond", type=bool, default=True,
+
+    # Model arguments
+    group = parser.add_argument_group("Model arguments")
+    group.add_argument("--model", type=str, choices=list(EqM_models.keys()), default="EqM-XL/2")
+    group.add_argument("--vae", type=str, choices=["ema", "mse"], default="ema")
+    group.add_argument("--image-size", type=int, choices=[256, 512], default=256)
+    group.add_argument("--num-classes", type=int, default=1000)
+    group.add_argument("--uncond", type=bool, default=True, 
                         help="disable/enable noise conditioning")
-    parser.add_argument("--ebm", type=str, choices=["none", "l2", "dot", "mean"], default="none",
+    group.add_argument("--ebm", type=str, choices=["none", "l2", "dot", "mean"], default="none",
                         help="energy formulation")
+
+    # Training arguments
+    group = parser.add_argument_group("Training arguments")
+    group.add_argument("--epochs", type=int, default=80)
+    group.add_argument("--global-batch-size", type=int, default=256)
+    group.add_argument("--global-seed", type=int, default=0)  
+    group.add_argument("--lr", type=float, default=1e-4)
+    group.add_argument("--adam-weigth-decay", type=float, default=0)
+    group.add_argument("--ckpt", type=str, default=None, help="Optional path to a custom EqM checkpoint")
+    group.add_argument("--resume", action="store_true", help="Toggle to enable resume")
+    group.add_argument("--disp", action="store_true", help="Toggle to enable Dispersive Loss")
     parse_transport_args(parser)
     parse_sample_args(parser)
+
+    # Logging arguments
+    group = parser.add_argument_group("Logging arguments")
+    group.add_argument("--project", type=str, default="exp")
+    group.add_argument("--log-every", type=int, default=100)
+    group.add_argument("--sample-every", type=int, default=10000)
+    group.add_argument("--ckpt-every", type=int, default=10000)
+    group.add_argument("--wandb", action="store_true")
+
+    parser.add_argument("--num-workers", type=int, default=4)
+    
     args = parser.parse_args()
+
     main(args)
