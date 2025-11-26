@@ -95,12 +95,21 @@ def main(args):
     total_saved = 0
     for i in tqdm(range(iterations), desc="Generating samples"):
         # Generate samples for this batch
+        if args.class_labels is not None:
+            class_ids = [int(c.strip()) for c in args.class_labels.split(',')]
+            class_ids_tensor = torch.tensor(class_ids, device=device, dtype=torch.long)
+            class_labels = class_ids_tensor[
+                torch.randint(0, class_ids_tensor.numel(), (args.batch_size,), device=device)
+            ]
+        else:
+            class_labels = None
         samples = sample_eqm(
             model=ema_model,
             vae=vae,
             device=device,
             batch_size=args.batch_size,
             latent_size=latent_size,
+            class_labels=class_labels,
             num_sampling_steps=args.num_sampling_steps,
             stepsize=args.stepsize,
             cfg_scale=args.cfg_scale,
@@ -152,6 +161,8 @@ if __name__ == "__main__":
                         help="Classifier-free guidance scale (default: 4.0)")
     parser.add_argument("--ckpt", type=str, required=True,
                         help="Path to EqM checkpoint")
+    parser.add_argument("--class-labels", type=str, default=None,
+                        help="Class labels to sample (single or comma-separated, e.g., '207' or '207,360,388'). If not specified, samples random classes.")
     parser.add_argument("--stepsize", type=float, default=0.0017,
                         help="Step size eta for gradient descent (default: 0.0017)")
     parser.add_argument("--num-sampling-steps", type=int, default=250,
