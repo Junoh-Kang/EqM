@@ -38,7 +38,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from PIL import Image
-
+from tqdm import tqdm
 
 @torch.no_grad()
 def sample_eqm(
@@ -127,7 +127,7 @@ def sample_eqm(
 
     # Sampling loop
     with torch.no_grad():
-        for step_idx in range(1, num_sampling_steps + 1):
+        for step_idx in tqdm(range(1, num_sampling_steps + 1)):
             if sampler == "gd":
                 # Standard gradient descent
                 out = model_fn(xt, t, y, cfg_scale)

@@ -32,7 +32,6 @@ def parse_sde_args(parser):
     group.add_argument("--last-step-size", type=float, default=0.04, \
                         help="size of the last step taken")
 
-
 def parse_sample_args(parser):
     group = parser.add_argument_group("Sampling arguments")
     group.add_argument("--num-samples", type=int, default=32)
