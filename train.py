@@ -23,22 +23,23 @@ from models import EqM_models
 from download import find_model
 from transport import create_transport
 from diffusers.models import AutoencoderKL
-import wandb_utils
 from torchvision import transforms
 from pathlib import Path
 from accelerate import Accelerator
+import wandb
 
-from train_utils import (
+from utils.utils import imagenet_label_from_idx
+import utils.wandb_utils as wandb_utils
+from utils.arg_utils import (
     parse_transport_args,
     parse_sample_args,
 )
-from utils import imagenet_label_from_idx
-from sampling_utils import (
+from utils.sampling_utils import (
     sample_eqm,
     WandBImageLogger,
     GradientNormTracker,
 )
-import wandb
+
 try:
     import yaml
 except ImportError:

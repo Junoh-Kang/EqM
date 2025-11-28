@@ -13,13 +13,13 @@ from tqdm import tqdm
 from models import EqM_models
 from download import find_model
 from diffusers.models import AutoencoderKL
-from sampling_utils import (
+
+from utils.sampling_utils import (
     sample_eqm,
     IntermediateImageSaver,
     GradientNormTracker,
     create_npz_from_sample_folder
 )
-
 
 def main(args):
     """
