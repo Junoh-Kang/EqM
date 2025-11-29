@@ -39,6 +39,9 @@ class TimestepValueLogger:
 		pred_norm = mean_flat(pred ** 2).cpu().tolist()
 		self.data["l2_pred"][t_value].extend(pred_norm)
 
+		target_norm = mean_flat(target ** 2).cpu().tolist()
+		self.data["l2_target"][t_value].extend(target_norm)
+		
 		gt_flat = target.reshape(target.size(0), -1)
 		pred_flat = pred.reshape(pred.size(0), -1)
 		cos_sim = torch.sum(gt_flat * pred_flat, dim=1) / (

@@ -40,6 +40,10 @@ from utils.sampling_utils import (
     GradientNormTracker,
 )
 
+from utils.train_utils import (
+    TimestepValueLogger
+)
+
 try:
     import yaml
 except ImportError:
@@ -463,6 +467,7 @@ if __name__ == "__main__":
     group.add_argument("--sample-every", type=int, default=10000)
     group.add_argument("--ckpt-every", type=int, default=10000)
     group.add_argument("--wandb", action="store_true")
+    group.add_argument("--timestep-analysis", action="store_true")
 
     parser.add_argument("--num-workers", type=int, default=4)
     

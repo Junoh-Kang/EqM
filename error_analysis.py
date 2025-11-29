@@ -353,8 +353,7 @@ def main(args):
                     break
 
         summary = timesteplogger.summary()
-        write_timestep_summary_csv(summary, "output", args.ckpt)
-        # plot_timestep_summary(summary, experiment_dir)
+        write_timestep_summary_csv(summary, experiment_dir, args.ckpt)
 
     accelerator.wait_for_everyone()
 
@@ -403,7 +402,7 @@ if __name__ == "__main__":
 
     # Logging arguments
     group = parser.add_argument_group("Logging arguments")
-    group.add_argument("--project", type=str, default="exp")
+    group.add_argument("--project", type=str, default="error_analysis")
     group.add_argument("--log-every", type=int, default=100)
     group.add_argument("--sample-every", type=int, default=10000)
     group.add_argument("--ckpt-every", type=int, default=10000)
