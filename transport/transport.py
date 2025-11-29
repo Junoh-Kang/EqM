@@ -138,6 +138,7 @@ class Transport:
         self, 
         model,  
         x1, 
+        t=None,
         model_kwargs=None
     ):
         """Loss for training the score model
@@ -148,13 +149,17 @@ class Transport:
         """
         if model_kwargs == None: 
             model_kwargs = {}
+
+        if t is None:
+            t, x0, x1 = self.sample(x1)
+        else:
+            x0 = th.randn_like(x1)
         
-        t, x0, x1 = self.sample(x1)
         t, xt, ut = self.path_sampler.plan(t, x0, x1)
         ut = ut * self.get_ct(t)[:,None,None,None] # use energy-compatible target
         model_output = model(xt, t, **model_kwargs)
         disp_loss = 0
-
+        
         # get intermediate activation and apply Dispersive Loss
         if "return_act" in model_kwargs and model_kwargs['return_act']:
             model_output, act = model_output
@@ -164,7 +169,9 @@ class Transport:
         assert model_output.size() == (B, *xt.size()[1:-1], C)
 
         terms = {}
+        terms['target'] = ut
         terms['pred'] = model_output
+        
         if self.model_type == ModelType.VELOCITY:
             terms['loss'] = mean_flat(((model_output - ut) ** 2))
         else: 
