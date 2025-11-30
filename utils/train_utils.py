@@ -33,21 +33,28 @@ class TimestepValueLogger:
 		Compute metrics from gt/pred tensors and append their values.
 		"""
 		
+		# error 
 		diff = mean_flat((target - pred) ** 2).cpu().tolist()
 		self.data["l2_error"][t_value].extend(diff)
 
-		pred_norm = mean_flat(pred ** 2).cpu().tolist()
-		self.data["l2_pred"][t_value].extend(pred_norm)
-
-		target_norm = mean_flat(target ** 2).cpu().tolist()
-		self.data["l2_target"][t_value].extend(target_norm)
-		
 		gt_flat = target.reshape(target.size(0), -1)
 		pred_flat = pred.reshape(pred.size(0), -1)
 		cos_sim = torch.sum(gt_flat * pred_flat, dim=1) / (
 			gt_flat.norm(dim=1) * pred_flat.norm(dim=1) + 1e-8
 		)
 		self.data["cosine_sim"][t_value].extend(cos_sim.cpu().tolist())
+
+		# norms
+		pred_norm = mean_flat(pred ** 2).cpu().tolist()
+		self.data["l2_pred"][t_value].extend(pred_norm)
+
+		target_norm = mean_flat(target ** 2).cpu().tolist()
+		self.data["l2_target"][t_value].extend(target_norm)
+		
+		norm_ratio = pred_norm / target_norm #if smaller, model underestimates noise level
+		self.data["pred/target"][t_value].extend(norm_ratio)
+
+		
 
 	def summary(self) -> Dict[str, Dict[float, Dict[str, float]]]:
 		
