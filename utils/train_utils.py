@@ -45,16 +45,15 @@ class TimestepValueLogger:
 		self.data["cosine_sim"][t_value].extend(cos_sim.cpu().tolist())
 
 		# norms
-		pred_norm = mean_flat(pred ** 2).cpu().tolist()
-		self.data["l2_pred"][t_value].extend(pred_norm)
+		pred_norm = mean_flat(pred ** 2)
+		self.data["l2_pred"][t_value].extend(pred_norm.cpu().tolist())
 
-		target_norm = mean_flat(target ** 2).cpu().tolist()
-		self.data["l2_target"][t_value].extend(target_norm)
-		
+		target_norm = mean_flat(target ** 2)
+		self.data["l2_target"][t_value].extend(target_norm.cpu().tolist())
+
 		norm_ratio = pred_norm / target_norm #if smaller, model underestimates noise level
-		self.data["pred/target"][t_value].extend(norm_ratio)
+		self.data["pred/target"][t_value].extend(norm_ratio.cpu().tolist())
 
-		
 
 	def summary(self) -> Dict[str, Dict[float, Dict[str, float]]]:
 		
@@ -66,6 +65,7 @@ class TimestepValueLogger:
 				arr = torch.tensor(vals)
 				output[metric][t_value] = {
 					"mean": arr.mean().item(),
+					"median": arr.median().item(),
 					"std": arr.std(unbiased=False).item(),
 				}
 		return output
