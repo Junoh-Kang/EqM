@@ -306,7 +306,7 @@ def main(args):
             with torch.no_grad():
                 # Map input images to latent space + normalize latents:
                 x = vae.encode(x).latent_dist.sample().mul_(0.18215)
-            model_kwargs = dict(y=y, return_act=args.disp, train=True)
+            model_kwargs = {"y": y, "return_act": args.disp, "train": True}
 
             loss_dict = transport.training_losses(model, x, model_kwargs)
             loss = loss_dict["loss"].mean()

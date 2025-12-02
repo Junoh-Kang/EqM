@@ -321,7 +321,7 @@ def main(args):
                 x = x.to(device)
                 y = y.to(device)
                 x = vae.encode(x).latent_dist.sample().mul_(0.18215)
-                model_kwargs = dict(y=y, return_act=args.disp, train=True)
+                model_kwargs = {"y": y, "return_act": args.disp, "train": True}
 
                 for t_value in t_values:
                     t = torch.full((x.shape[0],), t_value, device=x.device, dtype=x.dtype)

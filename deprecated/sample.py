@@ -95,7 +95,7 @@ def main(mode, args):
     z = torch.cat([z, z], 0)
     y_null = torch.tensor([1000] * n, device=device)
     y = torch.cat([y, y_null], 0)
-    model_kwargs = dict(y=y, cfg_scale=args.cfg_scale)
+    model_kwargs = {"y": y, "cfg_scale": args.cfg_scale}
 
     # Sample images:
     start_time = time()

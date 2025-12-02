@@ -156,10 +156,10 @@ def main(args):
         zs = torch.cat([zs, zs], 0)
         y_null = torch.tensor([1000] * n, device=device)
         ys = torch.cat([ys, y_null], 0)
-        sample_model_kwargs = dict(y=ys, cfg_scale=args.cfg_scale)
+        sample_model_kwargs = {"y": ys, "cfg_scale": args.cfg_scale}
         model_fn = ema.forward_with_cfg
     else:
-        sample_model_kwargs = dict(y=ys)
+        sample_model_kwargs = {"y": ys}
         model_fn = ema.forward
 
     if rank == 0:
@@ -191,10 +191,10 @@ def main(args):
                 z = torch.cat([z, z], 0)
                 y_null = torch.tensor([1000] * n, device=device)
                 y = torch.cat([y, y_null], 0)
-                model_kwargs = dict(y=y, cfg_scale=args.cfg_scale)
+                model_kwargs = {"y": y, "cfg_scale": args.cfg_scale}
                 t = torch.cat([t, t], 0)
             else:
-                model_kwargs = dict(y=y)
+                model_kwargs = {"y": y}
 
             xt = z
             m = torch.zeros_like(xt).to(xt).to(device)
@@ -235,10 +235,10 @@ def main(args):
                 z = torch.cat([z, z], 0)
                 y_null = torch.tensor([1000] * n, device=device)
                 y = torch.cat([y, y_null], 0)
-                model_kwargs = dict(y=y, cfg_scale=args.cfg_scale)
+                model_kwargs = {"y": y, "cfg_scale": args.cfg_scale}
                 t = torch.cat([t, t], 0)
             else:
-                model_kwargs = dict(y=y)
+                model_kwargs = {"y": y}
             xt = z
             m = torch.zeros_like(xt).to(xt).to(device)
 
