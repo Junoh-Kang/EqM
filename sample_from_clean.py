@@ -24,12 +24,6 @@ import os
 import torchvision.transforms as transforms
 from diffusers.models import AutoencoderKL
 from PIL import Image
-from torch.utils.data import DataLoader, Subset
-from torchvision.datasets import ImageFolder
-from tqdm import tqdm
-
-from download import find_model
-from models import EqM_models
 from sampling_utils import (
     DistortionTracker,
     GradientNormTracker,
@@ -39,6 +33,12 @@ from sampling_utils import (
     encode_images_to_latent,
     sample_eqm,
 )
+from torch.utils.data import DataLoader, Subset
+from torchvision.datasets import ImageFolder
+from tqdm import tqdm
+
+from download import find_model
+from models import EqM_models
 
 
 def main(args):
@@ -145,7 +145,6 @@ def main(args):
     print(f"Encoded {all_latents.shape[0]} images to latent space")
     print(f"Latent shape: {all_latents.shape}")
 
-
     # Compute high-frequency content for all images
     print("Computing high-frequency content metrics...")
     # Convert images from [-1, 1] to [0, 255] for frequency analysis
@@ -178,7 +177,7 @@ def main(args):
     if args.track_grad_norm:
         grad_tracker = GradientNormTracker(args.num_sampling_steps)
         hooks.append(grad_tracker)
-        print(f"Created GradientNormTracker hook")
+        print("Created GradientNormTracker hook")
 
     # Create distortion tracker - always include final step
     distortion_steps = save_steps_list.copy() if len(save_steps_list) > 0 else []
@@ -211,6 +210,7 @@ def main(args):
 
         # Save original clean images for this batch
         from sampling_utils import decode_latents
+
         original_batch_images = decode_latents(vae, batch_latents.to(device))
         for i_sample, img in enumerate(original_batch_images):
             index = total_saved + i_sample

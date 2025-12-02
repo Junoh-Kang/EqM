@@ -40,6 +40,7 @@ import torch
 from PIL import Image
 from tqdm import tqdm
 
+
 @torch.no_grad()
 def sample_eqm(
     model,
@@ -162,7 +163,6 @@ def sample_eqm(
                 )
                 for hook in hooks:
                     hook(context)
-                
 
         # Remove duplicates from CFG
         if use_cfg:
@@ -171,6 +171,7 @@ def sample_eqm(
         samples = decode_latents(vae, xt)
 
     return samples
+
 
 @torch.no_grad()
 def sample_eqm_two(
@@ -287,16 +288,15 @@ def sample_eqm_two(
                     available_classes.remove(orig_class.item())
                     new_class = np.random.choice(available_classes)
                     new_y.append(new_class)
-                    
+
                 y = torch.tensor(new_y, device=device)
-                
+
                 if use_cfg:
                     y_null = torch.tensor([1000] * n, device=device)
                     y = torch.cat([y, y_null], 0)
                     model_fn = model.forward_with_cfg
                 else:
                     model_fn = model.forward
-
 
             # Update latent and timestep
             xt = xt + out * stepsize
@@ -317,7 +317,6 @@ def sample_eqm_two(
                 )
                 for hook in hooks:
                     hook(context)
-                
 
         # Remove duplicates from CFG
         if use_cfg:
@@ -356,7 +355,7 @@ class IntermediateImageSaver:
         self.save_steps = set(save_steps)  # Use set for O(1) lookup
         self.output_folder = output_folder
         # Track global sample counter for each step to avoid overwriting
-        self.step_counters = {step: 0 for step in save_steps}
+        self.step_counters = dict.fromkeys(save_steps, 0)
         # self.return_images = return_images
 
     def __call__(self, context: SamplingHookContext):
@@ -388,28 +387,27 @@ class IntermediateImageSaver:
 class WandBImageLogger:
     """
     Hook for logging intermediate images during sampling directly to WandB.
-    
+
     Args:
         save_steps: List of step indices at which to log images (e.g., [5, 10, 250])
         train_step: Current training step (for WandB logging)
         output_folder: Folder to save logged images
         wandb_module: wandb module (pass wandb if imported, or None to skip logging)
     """
-    
-    def __init__(self, save_steps, train_step, output_folder,wandb_module=None):
+
+    def __init__(self, save_steps, train_step, output_folder, wandb_module=None):
         self.save_steps = set(save_steps)
         self.train_step = train_step
         self.output_folder = output_folder
         self.wandb = wandb_module
         self.logged_images = {step: [] for step in save_steps}
-        self.step_counters = {step: 0 for step in save_steps}
-        
+        self.step_counters = dict.fromkeys(save_steps, 0)
 
     def __call__(self, context: SamplingHookContext):
         """Log images to WandB if current step is in save_steps list."""
         if context.step_idx not in self.save_steps or self.wandb is None:
             return
-        
+
         folder = f"{self.output_folder}/train_{self.train_step:04d}/sample_{context.step_idx:03d}"
         os.makedirs(folder, exist_ok=True)
 
@@ -418,31 +416,26 @@ class WandBImageLogger:
         if context.use_cfg:
             batch_size = context.xt.shape[0] // 2
             xt_save = context.xt[:batch_size]
-        
+
         # Decode latents to images
         samples = decode_latents(context.vae, xt_save)
-        
+
         # Convert to wandb.Image objects
         start_idx = self.step_counters[context.step_idx]
         for i_sample, sample in enumerate(samples):
             global_idx = start_idx + i_sample
             img = Image.fromarray(sample)
             img.save(f"{folder}/{global_idx:03d}.png")
-            self.logged_images[context.step_idx].append(
-                self.wandb.Image(img, caption=f"Sample {global_idx:03d}")
-            )
-    
+            self.logged_images[context.step_idx].append(self.wandb.Image(img, caption=f"Sample {global_idx:03d}"))
+
     def finalize(self):
         """Log all collected images to WandB. Call this after sampling is complete."""
         if self.wandb is None:
             return
-        
+
         for step_idx in sorted(self.save_steps):
             if len(self.logged_images[step_idx]) > 0:
-                self.wandb.log({
-                    f"samples/step_{step_idx:03d}": self.logged_images[step_idx]
-                }, 
-                step=self.train_step)
+                self.wandb.log({f"samples/step_{step_idx:03d}": self.logged_images[step_idx]}, step=self.train_step)
 
 
 class DistortionTracker:
@@ -628,8 +621,7 @@ class GradientNormTracker:
 
         # Compute L2 norm for each sample in the batch
         norms = torch.linalg.norm(out_for_norm.reshape(out_for_norm.shape[0], -1), dim=1)  # shape: (batch_size,)
-        self.gradient_norms[context.step_idx-1].extend(norms.cpu().tolist())
-
+        self.gradient_norms[context.step_idx - 1].extend(norms.cpu().tolist())
 
     def finalize(self, args, folder):
         """
@@ -701,18 +693,18 @@ class GradientNormTracker:
         """
         Log gradient norm statistics to WandB.
         Call this after all sampling is complete.
-        
+
         Args:
             wandb_module: wandb module for logging
             train_step: Current training step for WandB logging
         """
         if wandb_module is None:
             return
-        
+
         # Compute statistics
         gradient_means = []
         gradient_stds = []
-        
+
         for step_norms in self.gradient_norms:
             if len(step_norms) > 0:
                 gradient_means.append(np.mean(step_norms))
@@ -720,32 +712,33 @@ class GradientNormTracker:
             else:
                 gradient_means.append(0.0)
                 gradient_stds.append(0.0)
-        
+
         # Create a table for gradient norms vs sampling steps
         # This allows WandB to plot with sampling_step on x-axis
         data = []
         for sampling_step, (mean_norm, std_norm) in enumerate(zip(gradient_means, gradient_stds)):
-            data.append([
-                sampling_step, 
-                mean_norm, 
-                std_norm, 
-                mean_norm + std_norm,  # Upper bound
-                mean_norm - std_norm,  # Lower bound
-            ])
-        
+            data.append(
+                [
+                    sampling_step,
+                    mean_norm,
+                    std_norm,
+                    mean_norm + std_norm,  # Upper bound
+                    mean_norm - std_norm,  # Lower bound
+                ]
+            )
+
         table = wandb_module.Table(
             columns=[
-                "sampling_step", 
-                "gradient_norm_mean", 
-                "gradient_norm_std", 
+                "sampling_step",
+                "gradient_norm_mean",
+                "gradient_norm_std",
                 "gradient_norm_upper",
                 "gradient_norm_lower",
             ],
-            data=data
+            data=data,
         )
         # Log the table with a consistent key (train_step is already in the table data)
         wandb_module.log({"gradient_norms": table}, step=train_step)
-
 
 
 def create_npz_from_sample_folder(sample_dir, num):

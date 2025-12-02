@@ -5,43 +5,38 @@
 A minimal training script for EqM using Hugging Face Accelerate.
 """
 
-import csv
-import os
 import argparse
+import csv
 import logging
-from time import time
+import os
 from collections import OrderedDict
 from copy import deepcopy
 from pathlib import Path
+from time import time
 
 import torch
+
 # the first flag below was False when we tested this script but True makes A100 training a lot faster:
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
+import numpy as np
 from accelerate import Accelerator
 from diffusers.models import AutoencoderKL
 from PIL import Image
 from torch.utils.data import DataLoader, Subset
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
-import numpy as np
-import matplotlib.pyplot as plt
 
-from models import EqM_models
-from download import find_model
-from transport import create_transport
-from utils.utils import imagenet_label_from_idx
 import utils.wandb_utils as wandb_utils
+from download import find_model
+from models import EqM_models
+from transport import create_transport
 from utils.arg_utils import (
-    parse_transport_args,
     parse_sample_args,
-)
-from utils.sampling_utils import (
-    sample_eqm,
-    WandBImageLogger,
-    GradientNormTracker,
+    parse_transport_args,
 )
 from utils.train_utils import TimestepValueLogger
+from utils.utils import imagenet_label_from_idx
 
 try:
     import yaml
@@ -81,8 +76,8 @@ def create_logger(logging_dir):
     if logging_dir:  # real logger
         logging.basicConfig(
             level=logging.INFO,
-            format='[\033[34m%(asctime)s\033[0m] %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S',
+            format="[\033[34m%(asctime)s\033[0m] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
             handlers=[logging.StreamHandler(), logging.FileHandler(f"{logging_dir}/log.txt")],
         )
         logger = logging.getLogger(__name__)
@@ -98,19 +93,15 @@ def center_crop_arr(pil_image, image_size):
     https://github.com/openai/guided-diffusion/blob/8fb3ad9197f16bbc40620447b2742e13458d2831/guided_diffusion/image_datasets.py#L126
     """
     while min(*pil_image.size) >= 2 * image_size:
-        pil_image = pil_image.resize(
-            tuple(x // 2 for x in pil_image.size), resample=Image.BOX
-        )
+        pil_image = pil_image.resize(tuple(x // 2 for x in pil_image.size), resample=Image.BOX)
 
     scale = image_size / min(*pil_image.size)
-    pil_image = pil_image.resize(
-        tuple(round(x * scale) for x in pil_image.size), resample=Image.BICUBIC
-    )
+    pil_image = pil_image.resize(tuple(round(x * scale) for x in pil_image.size), resample=Image.BICUBIC)
 
     arr = np.array(pil_image)
     crop_y = (arr.shape[0] - image_size) // 2
     crop_x = (arr.shape[1] - image_size) // 2
-    return Image.fromarray(arr[crop_y: crop_y + image_size, crop_x: crop_x + image_size])
+    return Image.fromarray(arr[crop_y : crop_y + image_size, crop_x : crop_x + image_size])
 
 
 def save_config_yaml(args, output_path, logger=None):
@@ -129,12 +120,11 @@ def save_config_yaml(args, output_path, logger=None):
         with output_path.open("w") as f:
             for key, value in config_dict.items():
                 f.write(f"{key}: {value}\n")
-        message = (
-            f"Saved config to {output_path} (plain text fallback; install PyYAML for YAML)."
-        )
+        message = f"Saved config to {output_path} (plain text fallback; install PyYAML for YAML)."
 
     if logger is not None:
         logger.info(message)
+
 
 def write_timestep_summary_csv(summary, output_dir, ckpt_label):
     """
@@ -157,9 +147,7 @@ def write_timestep_summary_csv(summary, output_dir, ckpt_label):
         return
 
     rows.sort(key=lambda r: (r["metric"], r["timestep"]))
-    stat_keys = sorted(
-        {key for row in rows for key in row.keys() if key not in {"ckpt", "metric", "timestep"}}
-    )
+    stat_keys = sorted({key for row in rows for key in row.keys() if key not in {"ckpt", "metric", "timestep"}})
     fieldnames = ["ckpt", "metric", "timestep", *stat_keys]
 
     csv_path = os.path.join(output_dir, "timestep_summary.csv")
@@ -187,25 +175,18 @@ def main(args):
     accelerator = Accelerator()
     device = accelerator.device
 
-    assert args.global_batch_size % accelerator.num_processes == 0, \
-        f"Batch size must be divisible by world size."
+    assert args.global_batch_size % accelerator.num_processes == 0, "Batch size must be divisible by world size."
     local_batch_size = int(args.global_batch_size // accelerator.num_processes)
 
-    accelerator.print(
-        f"Found {accelerator.num_processes} processes, "
-        f"trying to use device {device}. "
-    )
+    accelerator.print(f"Found {accelerator.num_processes} processes, trying to use device {device}. ")
 
     rank = accelerator.process_index
     seed = args.global_seed * accelerator.num_processes + rank
     torch.manual_seed(seed)
-    accelerator.print(
-        f"Starting rank={rank}, seed={seed}, "
-        f"local_batch_size={local_batch_size}."
-    )
+    accelerator.print(f"Starting rank={rank}, seed={seed}, local_batch_size={local_batch_size}.")
 
     # disable flash for energy training
-    if args.ebm != 'none':
+    if args.ebm != "none":
         torch.backends.cuda.enable_flash_sdp(False)
         torch.backends.cuda.enable_mem_efficient_sdp(False)
         torch.backends.cuda.enable_cudnn_sdp(False)
@@ -219,12 +200,14 @@ def main(args):
         # save_config_yaml(args, f"{experiment_dir}/config.yaml", logger)
 
     # Setup dataloader:
-    transform = transforms.Compose([
-        transforms.Lambda(lambda pil_image: center_crop_arr(pil_image, args.image_size)),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True),
-    ])
+    transform = transforms.Compose(
+        [
+            transforms.Lambda(lambda pil_image: center_crop_arr(pil_image, args.image_size)),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True),
+        ]
+    )
     dataset = ImageFolder(args.data_path, transform=transform)
 
     if args.single_class_idx is not None:
@@ -261,9 +244,7 @@ def main(args):
 
     # Note that parameter initialization is done within the EqM constructor
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
-    opt = torch.optim.AdamW(
-        model.parameters(), lr=args.lr, weight_decay=args.adam_weigth_decay
-    )
+    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.adam_weigth_decay)
 
     # Resume training state (only if --resume is set)
     resume_step = 0
@@ -271,24 +252,24 @@ def main(args):
     if args.ckpt is not None:
         ckpt_path = args.ckpt
         state_dict = find_model(ckpt_path)
-        if 'model' in state_dict.keys():
+        if "model" in state_dict.keys():
             model.load_state_dict(state_dict["model"])
             ema.load_state_dict(state_dict["ema"])
             opt.load_state_dict(state_dict["opt"])
 
             # Resume training state only if --resume is set
             if args.resume:
-                if 'train_steps' in state_dict:
-                    resume_step = state_dict['train_steps']
+                if "train_steps" in state_dict:
+                    resume_step = state_dict["train_steps"]
                     logger.info(f"Resuming training from step {resume_step}")  # type: ignore[has-type]
                 else:
                     # Try to parse step from checkpoint filename (e.g., "0050000.pt" -> 50000)
                     filename = os.path.basename(ckpt_path)
-                    resume_step = int(filename.replace('.pt', ''))
+                    resume_step = int(filename.replace(".pt", ""))
                     logger.info(f"Resuming training from step {resume_step} (parsed from filename)")  # type: ignore[has-type]
 
-                if 'epoch' in state_dict:
-                    start_epoch = state_dict['epoch'] + 1
+                if "epoch" in state_dict:
+                    start_epoch = state_dict["epoch"] + 1
                     logger.info(f"Resuming from epoch {start_epoch}")  # type: ignore[has-type]
                 else:
                     steps_per_epoch = len(dataset) // args.global_batch_size
@@ -345,10 +326,10 @@ def main(args):
                 for t_value in t_values:
                     t = torch.full((x.shape[0],), t_value, device=x.device, dtype=x.dtype)
                     loss_dict = transport.training_losses(model, x, model_kwargs, t)
-                    timesteplogger(loss_dict['target'], loss_dict['pred'], t_value)
+                    timesteplogger(loss_dict["target"], loss_dict["pred"], t_value)
 
                 first_t = t_values[0]
-                current_count = len(timesteplogger.data['l2_error'].get(first_t, []))
+                current_count = len(timesteplogger.data["l2_error"].get(first_t, []))
                 if current_count >= max_samples:
                     break
 
@@ -365,8 +346,12 @@ if __name__ == "__main__":
     # Default args here will train EqM-XL/2 with the hyperparameters we used in our paper (except training iters).
     parser = argparse.ArgumentParser()
     parser.add_argument("--t-values", type=str, required=True)
-    parser.add_argument("--metric-max-samples", type=int, default=1000,
-                        help="Maximum number of samples to collect per timestep before plotting.")
+    parser.add_argument(
+        "--metric-max-samples",
+        type=int,
+        default=1000,
+        help="Maximum number of samples to collect per timestep before plotting.",
+    )
     # Dataset argument
     group = parser.add_argument_group("Dataset argument")
     group.add_argument("--data-path", type=str, required=True)
@@ -378,13 +363,15 @@ if __name__ == "__main__":
     group = parser.add_argument_group("Model arguments")
     group.add_argument("--vae", type=str, choices=["ema", "mse"], default="ema")
     group.add_argument("--model", type=str, choices=list(EqM_models.keys()), default="EqM-XL/2")
-    group.add_argument("--uncond",
+    group.add_argument(
+        "--uncond",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="disable/enable noise conditioning",
     )
-    group.add_argument("--ebm", type=str, choices=["none", "l2", "dot", "mean"], default="none",
-                        help="energy formulation")
+    group.add_argument(
+        "--ebm", type=str, choices=["none", "l2", "dot", "mean"], default="none", help="energy formulation"
+    )
 
     # Training arguments
     group = parser.add_argument_group("Training arguments")
@@ -413,4 +400,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     main(args)
-

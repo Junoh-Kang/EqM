@@ -4,17 +4,21 @@
 """
 A single-GPU sampling script for EqM with intermediate image logging.
 """
+
 import torch
+
 # the first flag below was False when we tested this script but True makes A100 training a lot faster:
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
-from PIL import Image
-from tqdm import tqdm
-from models import EqM_models
-from download import find_model
-from diffusers.models import AutoencoderKL
 import argparse
 import os
+
+from diffusers.models import AutoencoderKL
+from PIL import Image
+from tqdm import tqdm
+
+from download import find_model
+from models import EqM_models
 
 
 def requires_grad(model, flag=True):
@@ -68,7 +72,7 @@ def main(args):
     print(f"Using device: {device}")
 
     # Disable flash for energy training
-    if args.ebm != 'none':
+    if args.ebm != "none":
         torch.backends.cuda.enable_flash_sdp(False)
         torch.backends.cuda.enable_mem_efficient_sdp(False)
         torch.backends.cuda.enable_cudnn_sdp(False)
@@ -78,17 +82,14 @@ def main(args):
     assert args.image_size % 8 == 0, "Image size must be divisible by 8 (for the VAE encoder)."
     latent_size = args.image_size // 8
     model = EqM_models[args.model](
-        input_size=latent_size,
-        num_classes=args.num_classes,
-        uncond=args.uncond,
-        ebm=args.ebm
+        input_size=latent_size, num_classes=args.num_classes, uncond=args.uncond, ebm=args.ebm
     ).to(device)
 
     # Load checkpoint (use EMA weights for better sample quality)
     if args.ckpt is not None:
         ckpt_path = args.ckpt
         state_dict = find_model(ckpt_path)
-        if 'model' in state_dict.keys():
+        if "model" in state_dict.keys():
             # Checkpoint has both 'model' and 'ema' keys - use EMA for sampling
             model.load_state_dict(state_dict["ema"])
             print(f"Loaded EMA weights from checkpoint: {ckpt_path}")
@@ -109,12 +110,14 @@ def main(args):
     # Parse class labels
     if args.class_labels is not None:
         # Parse comma-separated list or single class
-        class_ids = [int(c.strip()) for c in args.class_labels.split(',')]
+        class_ids = [int(c.strip()) for c in args.class_labels.split(",")]
         # Generate num_samples for each class
         class_labels = []
         for class_id in class_ids:
             class_labels.extend([class_id] * args.num_samples)
-        print(f"Sampling {len(class_ids)} class(es) {class_ids}, {args.num_samples} samples each (total: {len(class_labels)} samples)")
+        print(
+            f"Sampling {len(class_ids)} class(es) {class_ids}, {args.num_samples} samples each (total: {len(class_labels)} samples)"
+        )
     else:
         # Default: random classes
         class_labels = [None] * args.num_samples
@@ -173,11 +176,11 @@ def main(args):
         with torch.no_grad():
             for step_idx in range(args.num_sampling_steps - 1):
                 # Compute gradient/output
-                if args.sampler == 'gd':
+                if args.sampler == "gd":
                     out = model_fn(xt, t_combined, y_combined, args.cfg_scale)
                     if not torch.is_tensor(out):
                         out = out[0]
-                elif args.sampler == 'ngd':
+                elif args.sampler == "ngd":
                     x_ = xt + args.stepsize * m * args.mu
                     out = model_fn(x_, t_combined, y_combined, args.cfg_scale)
                     if not torch.is_tensor(out):
@@ -217,7 +220,7 @@ def main(args):
 
     # Save class labels to text file
     labels_path = os.path.join(args.folder, "labels.txt")
-    with open(labels_path, 'w') as f:
+    with open(labels_path, "w") as f:
         for label in actual_labels:
             f.write(f"{label}\n")
 
@@ -236,29 +239,35 @@ if __name__ == "__main__":
     parser.add_argument("--global-seed", type=int, default=0)
     parser.add_argument("--vae", type=str, choices=["ema", "mse"], default="ema")
     parser.add_argument("--cfg-scale", type=float, default=4.0)
-    parser.add_argument("--ckpt", type=str, default=None,
-                        help="Path to a EqM checkpoint")
-    parser.add_argument("--stepsize", type=float, default=0.0017,
-                        help="step size eta")
+    parser.add_argument("--ckpt", type=str, default=None, help="Path to a EqM checkpoint")
+    parser.add_argument("--stepsize", type=float, default=0.0017, help="step size eta")
     parser.add_argument("--num-sampling-steps", type=int, default=250)
-    parser.add_argument("--folder", type=str, default='samples_single')
-    parser.add_argument("--sampler", type=str, default='gd', choices=['gd', 'ngd'])
-    parser.add_argument("--mu", type=float, default=0.3,
-                        help="NAG-GD hyperparameter mu")
-    parser.add_argument("--uncond", type=bool, default=True,
-                        help="disable/enable noise conditioning")
-    parser.add_argument("--ebm", type=str, choices=["none", "l2", "dot", "mean"], default="none",
-                        help="energy formulation")
+    parser.add_argument("--folder", type=str, default="samples_single")
+    parser.add_argument("--sampler", type=str, default="gd", choices=["gd", "ngd"])
+    parser.add_argument("--mu", type=float, default=0.3, help="NAG-GD hyperparameter mu")
+    parser.add_argument("--uncond", type=bool, default=True, help="disable/enable noise conditioning")
+    parser.add_argument(
+        "--ebm", type=str, choices=["none", "l2", "dot", "mean"], default="none", help="energy formulation"
+    )
 
     # New arguments for class labels
-    parser.add_argument("--class-labels", type=str, default=None,
-                        help="Class labels to sample (single or comma-separated, e.g., '207' or '207,360,388'). If not specified, samples random classes.")
-    parser.add_argument("--num-samples", type=int, default=1,
-                        help="Number of samples to generate per class (default: 1)")
+    parser.add_argument(
+        "--class-labels",
+        type=str,
+        default=None,
+        help="Class labels to sample (single or comma-separated, e.g., '207' or '207,360,388'). If not specified, samples random classes.",
+    )
+    parser.add_argument(
+        "--num-samples", type=int, default=1, help="Number of samples to generate per class (default: 1)"
+    )
 
     # New argument for intermediate image saving
-    parser.add_argument("--save-interval", type=int, default=None,
-                        help="Save intermediate images every N steps (optional, if not specified, intermediate images won't be saved)")
+    parser.add_argument(
+        "--save-interval",
+        type=int,
+        default=None,
+        help="Save intermediate images every N steps (optional, if not specified, intermediate images won't be saved)",
+    )
 
     args = parser.parse_args()
 
