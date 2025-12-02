@@ -138,8 +138,8 @@ class Transport:
         self, 
         model,  
         x1, 
+        model_kwargs=None,
         t=None,
-        model_kwargs=None
     ):
         """Loss for training the score model
         Args:
@@ -193,6 +193,43 @@ class Transport:
         terms['loss'] += 0.5*disp_loss      
         return terms
     
+
+    def adv_training_losses(
+        self, 
+        model,  
+        x1, 
+        model_kwargs=None,
+        adv_kwargs=None,
+    ):
+        """Loss for adversarial training the score model 
+        Args:
+        - model: backbone model; could be score, noise, or velocity
+        - x1: datapoint
+        - model_kwargs: additional arguments for the model
+        """
+        if model_kwargs == None: 
+            model_kwargs = {}
+
+        terms = {}
+
+        if adv_kwargs['type'] == 'consistency':
+            stepsize = th.empty_like(x1[:, :1, :1, :1]).uniform_(0.0, adv_kwargs['stepsize'])
+            t = th.ones((x1.shape[0],), device=x1.device, dtype=x1.dtype)
+            
+            # generate fake sample
+            model_output = model(x1, t, **model_kwargs).detach()
+            x_adv = x1 + stepsize * model_output
+            x_adv = x_adv.detach()
+            
+            # consistency (f(x_fake) = - f(x))
+            model_output_adv = model(x_adv, t, **model_kwargs)
+            terms["out_x"] = model_output
+            terms["out_adv"] = model_output_adv
+            terms["loss"] = mean_flat(((model_output + model_output_adv) ** 2))
+        else:
+            raise "Not implemented"
+
+        return terms
 
     def get_drift(
         self

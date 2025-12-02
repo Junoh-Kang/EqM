@@ -344,7 +344,7 @@ def main(args):
 
                 for t_value in t_values:
                     t = torch.full((x.shape[0],), t_value, device=x.device, dtype=x.dtype)
-                    loss_dict = transport.training_losses(model, x, t, model_kwargs)
+                    loss_dict = transport.training_losses(model, x, model_kwargs, t)
                     timesteplogger(loss_dict['target'], loss_dict['pred'], t_value)
 
                 first_t = t_values[0]

@@ -180,6 +180,8 @@ def main(args):
         model_string_name = args.model.replace("/", "-")  # e.g., SiT-XL/2 --> SiT-XL-2 (for naming folders)
         condition = "uncond" if args.uncond else "cond"
         experiment_name = f"{timestamp}-{model_string_name}-{condition}-{args.const_type}"
+        if args.adv is not None:
+            experiment_name += f"-{args.adv}"
         experiment_dir = f"_trained/{args.project}/{experiment_name}"  
         checkpoint_dir = f"{experiment_dir}/checkpoints"
         os.makedirs(checkpoint_dir, exist_ok=True)
@@ -305,6 +307,8 @@ def main(args):
     train_steps = resume_step
     log_steps = 0
     running_loss = 0
+    if args.adv is not None:
+        running_loss_adv = 0
     start_time = time()
     
     logger.info(f"Training for {args.epochs} epochs...")
@@ -313,6 +317,7 @@ def main(args):
         for x, y in loader:
 
             opt.zero_grad()
+            total_loss = 0
 
             x = x.to(device)
             y = y.to(device)
@@ -323,16 +328,32 @@ def main(args):
 
             loss_dict = transport.training_losses(model, x, model_kwargs)
             loss = loss_dict["loss"].mean()
-            accelerator.backward(loss)
+            total_loss += loss
 
+            if args.adv is not None:
+                if args.adv == 'consistency': 
+                    # implement (f(x_fake) = - f(x))
+                    adv_kwargs = {'type': 'consistency', 'stepsize': 0.003}
+
+                loss_dict_adv = transport.adv_training_losses(
+                    model, x, model_kwargs, adv_kwargs
+                )
+                loss_adv = loss_dict_adv["loss"].mean()
+                total_loss += loss_adv
+
+            accelerator.backward(total_loss)
             opt.step()
+
             
             update_ema(ema, model.module if hasattr(model, 'module') else model)
             
             # Log loss values:
             running_loss += loss.item()
+            if args.adv is not None:
+                running_loss_adv += loss_adv.item()
             log_steps += 1
             train_steps += 1
+            
             if train_steps % args.log_every == 0:
                 # Measure training speed:
                 torch.cuda.synchronize()
@@ -342,14 +363,35 @@ def main(args):
                 avg_loss = torch.tensor(running_loss / log_steps, device=device)
                 avg_loss = accelerator.gather(avg_loss).mean().item()
                 
-                logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
+                if args.adv is not None:
+                    avg_loss_adv = torch.tensor(running_loss_adv / log_steps, device=device)
+                    avg_loss_adv = accelerator.gather(avg_loss_adv).mean().item()
+                    logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Adv Loss: {avg_loss_adv:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
+                else:
+                    logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
+                    
                 if args.wandb and accelerator.is_main_process:
-                    wandb_utils.log(
-                        {"train loss": avg_loss, "train steps per second": steps_per_sec },
-                        step=train_steps
-                    )
+                    if args.adv is not None:
+                        wandb_utils.log(
+                            {
+                                "train loss": avg_loss, 
+                                "adv loss": avg_loss_adv,
+                                "train steps per second": steps_per_sec
+                            }
+                        )
+                    else:
+                        wandb_utils.log(
+                            {
+                                "train loss": avg_loss, 
+                                "train steps per second": steps_per_sec 
+                            },
+                            step=train_steps
+                        )
+
                 # Reset monitoring variables:
                 running_loss = 0
+                if args.adv is not None:
+                    running_loss_adv = 0
                 log_steps = 0
                 start_time = time()
 
@@ -456,6 +498,7 @@ if __name__ == "__main__":
     group.add_argument("--ckpt", type=str, default=None, help="Optional path to a custom EqM checkpoint")
     group.add_argument("--resume", action="store_true", help="Toggle to enable resume")
     group.add_argument("--disp", action="store_true", help="Toggle to enable Dispersive Loss")
+    group.add_argument("--adv", type=str, help="Adversarial Loss Types")
     
     parse_transport_args(parser)
     parse_sample_args(parser)
