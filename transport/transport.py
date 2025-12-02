@@ -68,7 +68,10 @@ class Transport:
         """
         shape = th.tensor(z.size())
         N = th.prod(shape[1:])
-        _fn = lambda x: -N / 2.0 * np.log(2 * np.pi) - th.sum(x**2) / 2.0
+
+        def _fn(x):
+            return -N / 2.0 * np.log(2 * np.pi) - th.sum(x**2) / 2.0
+
         return th.vmap(_fn)(z)
 
     def check_interval(
@@ -142,7 +145,7 @@ class Transport:
         - x1: datapoint
         - model_kwargs: additional arguments for the model
         """
-        if model_kwargs == None:
+        if model_kwargs is None:
             model_kwargs = {}
 
         if t is None:
@@ -201,7 +204,7 @@ class Transport:
         - x1: datapoint
         - model_kwargs: additional arguments for the model
         """
-        if model_kwargs == None:
+        if model_kwargs is None:
             model_kwargs = {}
 
         terms = {}
@@ -221,7 +224,7 @@ class Transport:
             terms["out_adv"] = model_output_adv
             terms["loss"] = mean_flat((model_output + model_output_adv) ** 2)
         else:
-            raise "Not implemented"
+            raise NotImplementedError("Adversarial loss type is not supported")
 
         return terms
 
@@ -265,16 +268,18 @@ class Transport:
         """member function for obtaining score of
         x_t = alpha_t * x + sigma_t * eps"""
         if self.model_type == ModelType.NOISE:
-            score_fn = (
-                lambda x, t, model, **kwargs: model(x, t, **kwargs)
-                / -self.path_sampler.compute_sigma_t(path.expand_t_like_x(t, x))[0]
-            )
+
+            def score_fn(x, t, model, **kwargs):
+                sigma_t = self.path_sampler.compute_sigma_t(path.expand_t_like_x(t, x))[0]
+                return model(x, t, **kwargs) / -sigma_t
         elif self.model_type == ModelType.SCORE:
-            score_fn = lambda x, t, model, **kwagrs: model(x, t, **kwagrs)
+
+            def score_fn(x, t, model, **model_kwargs):
+                return model(x, t, **model_kwargs)
         elif self.model_type == ModelType.VELOCITY:
-            score_fn = lambda x, t, model, **kwargs: self.path_sampler.get_score_from_velocity(
-                model(x, t, **kwargs), x, t
-            )
+
+            def score_fn(x, t, model, **kwargs):
+                return self.path_sampler.get_score_from_velocity(model(x, t, **kwargs), x, t)
         else:
             raise NotImplementedError()
 
@@ -307,9 +312,10 @@ class Sampler:
             diffusion = self.transport.path_sampler.compute_diffusion(x, t, form=diffusion_form, norm=diffusion_norm)
             return diffusion
 
-        sde_drift = lambda x, t, model, **kwargs: self.drift(x, t, model, **kwargs) + diffusion_fn(x, t) * self.score(
-            x, t, model, **kwargs
-        )
+        def sde_drift(x, t, model, **kwargs):
+            drift_val = self.drift(x, t, model, **kwargs)
+            score_val = self.score(x, t, model, **kwargs)
+            return drift_val + diffusion_fn(x, t) * score_val
 
         sde_diffusion = diffusion_fn
 
@@ -325,21 +331,26 @@ class Sampler:
         """Get the last step function of the SDE solver"""
 
         if last_step is None:
-            last_step_fn = lambda x, t, model, **model_kwargs: x
+
+            def last_step_fn(x, t, model, **model_kwargs):
+                return x
         elif last_step == "Mean":
-            last_step_fn = (
-                lambda x, t, model, **model_kwargs: x + sde_drift(x, t, model, **model_kwargs) * last_step_size
-            )
+
+            def last_step_fn(x, t, model, **model_kwargs):
+                return x + sde_drift(x, t, model, **model_kwargs) * last_step_size
         elif last_step == "Tweedie":
             alpha = self.transport.path_sampler.compute_alpha_t  # simple aliasing; the original name was too long
             sigma = self.transport.path_sampler.compute_sigma_t
-            last_step_fn = lambda x, t, model, **model_kwargs: x / alpha(t)[0][0] + (sigma(t)[0][0] ** 2) / alpha(t)[0][
-                0
-            ] * self.score(x, t, model, **model_kwargs)
+
+            def last_step_fn(x, t, model, **model_kwargs):
+                alpha_val = alpha(t)[0][0]
+                sigma_val = sigma(t)[0][0]
+                score_val = self.score(x, t, model, **model_kwargs)
+                return x / alpha_val + (sigma_val**2) / alpha_val * score_val
         elif last_step == "Euler":
-            last_step_fn = (
-                lambda x, t, model, **model_kwargs: x + self.drift(x, t, model, **model_kwargs) * last_step_size
-            )
+
+            def last_step_fn(x, t, model, **model_kwargs):
+                return x + self.drift(x, t, model, **model_kwargs) * last_step_size
         else:
             raise NotImplementedError()
 
@@ -419,7 +430,9 @@ class Sampler:
         - reverse: whether solving the ODE in reverse (data to noise); default to False
         """
         if reverse:
-            drift = lambda x, t, model, **kwargs: self.drift(x, th.ones_like(t) * (1 - t), model, **kwargs)
+
+            def drift(x, t, model, **kwargs):
+                return self.drift(x, th.ones_like(t) * (1 - t), model, **kwargs)
         else:
             drift = self.drift
 

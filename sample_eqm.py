@@ -90,7 +90,7 @@ def main(args):
     # Sampling loop
     print(f"Starting sampling with {args.sampler.upper()} sampler...")
     total_saved = 0
-    for i in tqdm(range(iterations), desc="Generating samples"):
+    for _ in tqdm(range(iterations), desc="Generating samples"):
         # Generate samples for this batch
         if args.class_labels is not None:
             class_ids = [int(c.strip()) for c in args.class_labels.split(",")]

@@ -90,7 +90,7 @@ def main(args):
     # Sampling loop
     print(f"Starting sampling with {args.sampler.upper()} sampler...")
     total_saved = 0
-    for i in tqdm(range(iterations), desc="Generating samples"):
+    for _i in tqdm(range(iterations), desc="Generating samples"):
         # Generate samples for this batch
         samples = sample_eqm_two(
             model=ema_model,

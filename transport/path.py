@@ -65,8 +65,8 @@ class ICPlan:
 
         try:
             diffusion = choices[form]
-        except KeyError:
-            raise NotImplementedError(f"Diffusion form {form} not implemented")
+        except KeyError as err:
+            raise NotImplementedError(f"Diffusion form {form} not implemented") from err
 
         return diffusion
 

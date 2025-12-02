@@ -54,8 +54,8 @@ class sde:
 
         try:
             sampler = sampler_dict[self.sampler_type]
-        except:
-            raise NotImplementedError("Smapler type not implemented.")
+        except KeyError as err:
+            raise NotImplementedError(f"Sampler type {self.sampler_type} not implemented.") from err
 
         return sampler
 

@@ -232,7 +232,7 @@ def main(args):
     # Initialize gradient norm accumulator for each sampling step
     gradient_norms = [[] for _ in range(args.num_sampling_steps - 1)]
 
-    for i in pbar:
+    for _ in pbar:
         with torch.no_grad():
             z = torch.randn(n, 4, latent_size, latent_size, device=device)
             y = torch.randint(0, args.num_classes, (n,), device=device)

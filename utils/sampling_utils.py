@@ -55,7 +55,7 @@ def sample_eqm(
     cfg_scale=4.0,
     sampler="gd",
     mu=0.3,
-    hooks=[],
+    hooks=None,
 ):
     """
     Generate samples using EqM model with gradient descent sampling.
@@ -94,6 +94,9 @@ def sample_eqm(
         >>> samples = sample_eqm(model, vae, device, batch_size=16, latent_size=32, hooks=[img_hook, grad_hook])
         >>> grad_hook.finalize(args, "outputs")
     """
+    if hooks is None:
+        hooks = []
+
     use_cfg = cfg_scale > 1.0
     n = batch_size
 
@@ -187,7 +190,7 @@ def sample_eqm_two(
     cfg_scale=4.0,
     sampler="gd",
     mu=0.3,
-    hooks=[],
+    hooks=None,
 ):
     """
     Generate samples using EqM model with gradient descent sampling.
@@ -226,6 +229,9 @@ def sample_eqm_two(
         >>> samples = sample_eqm(model, vae, device, batch_size=16, latent_size=32, hooks=[img_hook, grad_hook])
         >>> grad_hook.finalize(args, "outputs")
     """
+    if hooks is None:
+        hooks = []
+
     use_cfg = cfg_scale > 1.0
     n = batch_size
 
@@ -526,7 +532,7 @@ class DistortionTracker:
 
             # Reconstruct full latent tensor from batches
             latent_list = []
-            for batch_start, batch_latents in sorted(self.latent_batches[step_idx]):
+            for _batch_start, batch_latents in sorted(self.latent_batches[step_idx]):
                 latent_list.append(batch_latents)
             all_latents = torch.cat(latent_list, dim=0)
 

@@ -38,7 +38,7 @@ def initialize(args, entity, exp_name, project_name, dir):
 
 def log(stats, step=None):
     if is_main_process():
-        wandb.log({k: v for k, v in stats.items()}, step=step)
+        wandb.log(dict(stats), step=step)
 
 
 def log_image(sample, step=None):

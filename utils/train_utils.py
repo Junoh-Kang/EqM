@@ -5,7 +5,6 @@ Utilities for monitoring EqM training/evaluation.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Dict
 
 import torch
 
@@ -23,7 +22,7 @@ class TimestepValueLogger:
     """
 
     def __init__(self) -> None:
-        self.data: Dict[str, Dict[float, list]] = defaultdict(lambda: defaultdict(list))
+        self.data: dict[str, dict[float, list]] = defaultdict(lambda: defaultdict(list))
 
     def reset(self) -> None:
         self.data.clear()
@@ -53,8 +52,8 @@ class TimestepValueLogger:
         norm_ratio = pred_norm / target_norm  # if smaller, model underestimates noise level
         self.data["pred/target"][t_value].extend(norm_ratio.cpu().tolist())
 
-    def summary(self) -> Dict[str, Dict[float, Dict[str, float]]]:
-        output: Dict[str, Dict[float, Dict[str, float]]] = {}
+    def summary(self) -> dict[str, dict[float, dict[str, float]]]:
+        output: dict[str, dict[float, dict[str, float]]] = {}
 
         for metric, ts in self.data.items():
             output[metric] = {}
