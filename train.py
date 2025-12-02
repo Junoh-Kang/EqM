@@ -317,6 +317,8 @@ def main(args):
                 if args.adv == "consistency":
                     # implement (f(x_fake) = - f(x))
                     adv_kwargs = {"type": "consistency", "stepsize": args.adv_stepsize}
+                else:
+                    raise NotImplementedError(f"Adversarial loss type {args.adv} is not supported")
 
                 loss_dict_adv = transport.adv_training_losses(model, x, model_kwargs, adv_kwargs)
                 loss_adv = loss_dict_adv["loss"].mean()
@@ -388,9 +390,18 @@ def main(args):
 
                     # Fixed initial latent and class labels for consistent comparison
                     latent_size = args.image_size // 8
-                    torch.manual_seed(args.global_seed)  # Use same seed for reproducibility
-                    initial_latent = torch.randn(args.num_samples, 4, latent_size, latent_size, device=device)
-                    class_labels = torch.randint(0, args.num_classes, (args.num_samples,), device=device)
+                    sample_generator = torch.Generator(device=device).manual_seed(args.global_seed)
+                    initial_latent = torch.randn(
+                        args.num_samples,
+                        4,
+                        latent_size,
+                        latent_size,
+                        device=device,
+                        generator=sample_generator,
+                    )
+                    class_labels = torch.randint(
+                        0, args.num_classes, (args.num_samples,), device=device, generator=sample_generator
+                    )
                     if args.single_class_idx is not None:
                         class_labels.fill_(args.single_class_idx)
 
