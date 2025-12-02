@@ -4,18 +4,22 @@
 """
 Sample new images from a pre-trained SiT.
 """
+
 import torch
+
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
-from torchvision.utils import save_image
-from diffusers.models import AutoencoderKL
-from download import find_model
-from models import SiT_models
-from train_utils import parse_ode_args, parse_sde_args, parse_transport_args
-from transport import create_transport, Sampler
 import argparse
 import sys
 from time import time
+
+from diffusers.models import AutoencoderKL
+from torchvision.utils import save_image
+from train_utils import parse_ode_args, parse_sde_args, parse_transport_args
+
+from download import find_model
+from models import SiT_models
+from transport import Sampler, create_transport
 
 
 def main(mode, args):
@@ -28,7 +32,9 @@ def main(mode, args):
         assert args.model == "SiT-XL/2", "Only SiT-XL/2 models are available for auto-download."
         assert args.image_size in [256, 512]
         assert args.num_classes == 1000
-        assert args.image_size == 256, "512x512 models are not yet available for auto-download." # remove this line when 512x512 models are available
+        assert args.image_size == 256, (
+            "512x512 models are not yet available for auto-download."
+        )  # remove this line when 512x512 models are available
         learn_sigma = args.image_size == 256
     else:
         learn_sigma = False
@@ -45,13 +51,7 @@ def main(mode, args):
     state_dict = find_model(ckpt_path)
     model.load_state_dict(state_dict)
     model.eval()  # important!
-    transport = create_transport(
-        args.path_type,
-        args.prediction,
-        args.loss_weight,
-        args.train_eps,
-        args.sample_eps
-    )
+    transport = create_transport(args.path_type, args.prediction, args.loss_weight, args.train_eps, args.sample_eps)
     sampler = Sampler(transport)
     if mode == "ODE":
         if args.likelihood:
@@ -68,9 +68,9 @@ def main(mode, args):
                 num_steps=args.num_sampling_steps,
                 atol=args.atol,
                 rtol=args.rtol,
-                reverse=args.reverse
+                reverse=args.reverse,
             )
-            
+
     elif mode == "SDE":
         sample_fn = sampler.sample_sde(
             sampling_method=args.sampling_method,
@@ -80,13 +80,12 @@ def main(mode, args):
             last_step_size=args.last_step_size,
             num_steps=args.num_sampling_steps,
         )
-    
 
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
 
     # Labels to condition the model with (feel free to change):
     class_labels = [207, 360, 387, 974, 88, 979, 417, 279]
-    
+
     # Create sampling noise:
     n = len(class_labels)
     z = torch.randn(n, 4, latent_size, latent_size, device=device)
@@ -96,7 +95,7 @@ def main(mode, args):
     z = torch.cat([z, z], 0)
     y_null = torch.tensor([1000] * n, device=device)
     y = torch.cat([y, y_null], 0)
-    model_kwargs = dict(y=y, cfg_scale=args.cfg_scale)
+    model_kwargs = {"y": y, "cfg_scale": args.cfg_scale}
 
     # Sample images:
     start_time = time()
@@ -115,12 +114,12 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: program.py <mode> [options]")
         sys.exit(1)
-    
+
     mode = sys.argv[1]
 
     assert mode[:2] != "--", "Usage: program.py <mode> [options]"
     assert mode in ["ODE", "SDE"], "Invalid mode. Please choose 'ODE' or 'SDE'"
-    
+
     parser.add_argument("--model", type=str, choices=list(SiT_models.keys()), default="SiT-XL/2")
     parser.add_argument("--vae", type=str, choices=["ema", "mse"], default="mse")
     parser.add_argument("--image-size", type=int, choices=[256, 512], default=256)
@@ -128,9 +127,12 @@ if __name__ == "__main__":
     parser.add_argument("--cfg-scale", type=float, default=4.0)
     parser.add_argument("--num-sampling-steps", type=int, default=250)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--ckpt", type=str, default=None,
-                        help="Optional path to a SiT checkpoint (default: auto-download a pre-trained SiT-XL/2 model).")
-
+    parser.add_argument(
+        "--ckpt",
+        type=str,
+        default=None,
+        help="Optional path to a SiT checkpoint (default: auto-download a pre-trained SiT-XL/2 model).",
+    )
 
     parse_transport_args(parser)
     if mode == "ODE":
@@ -139,6 +141,6 @@ if __name__ == "__main__":
     elif mode == "SDE":
         parse_sde_args(parser)
         # Further processing for SDE
-    
+
     args = parser.parse_known_args()[0]
     main(mode, args)

@@ -1,7 +1,9 @@
+from typing import List, Optional, Tuple, Union
+
 import numpy as np
 import torch
-from typing import List, Union, Optional, Tuple
 from PIL import Image
+
 try:
     from torchvision.models._meta import _IMAGENET_CATEGORIES as _IMAGENET_CATEGORIES
 except ImportError:
@@ -21,11 +23,12 @@ def imagenet_label_from_idx(class_idx: int):
 
 ArrayLike = Union[np.ndarray, torch.Tensor, Image.Image]
 
+
 def _to_pil(img: ArrayLike) -> Image.Image:
     """Convert numpy array, torch tensor, or PIL Image to PIL Image (RGB)."""
     if isinstance(img, Image.Image):
         return img.convert("RGB")
-    
+
     if isinstance(img, torch.Tensor):
         x = img.detach().cpu()
         # CHW -> HWC
@@ -62,11 +65,11 @@ def save_image_grid(
     *,
     padding: int = 2,
     bg_color: Tuple[int, int, int] = (0, 0, 0),
-    resize_mode: str = "first"  # "first" | "max" | "min" | "none"
+    resize_mode: str = "first",  # "first" | "max" | "min" | "none"
 ) -> None:
     """
     Save a grid of images.
-    
+
     Args:
         images: List of images (numpy HWC, torch CHW/HWC, or PIL Images)
         out_path: Output file path
@@ -82,11 +85,11 @@ def save_image_grid(
     """
     if not images:
         raise ValueError("images list cannot be empty")
-    
+
     # Convert all to PIL
     pil_images = [_to_pil(img) for img in images]
     n_images = len(pil_images)
-    
+
     # Determine grid layout
     if nrows is None and ncols is None:
         ncols = int(np.ceil(np.sqrt(n_images)))
@@ -95,7 +98,7 @@ def save_image_grid(
         nrows = int(np.ceil(n_images / ncols))
     elif ncols is None:
         ncols = int(np.ceil(n_images / nrows))
-    
+
     # Determine target size
     if resize_mode == "first":
         target_w, target_h = pil_images[0].size
@@ -108,18 +111,19 @@ def save_image_grid(
     else:  # "none"
         target_w = max(img.width for img in pil_images)
         target_h = max(img.height for img in pil_images)
-    
+
     # Resize if needed (except for "none" mode)
     if resize_mode != "none":
-        pil_images = [img.resize((target_w, target_h), Image.BILINEAR) 
-                      if img.size != (target_w, target_h) else img
-                      for img in pil_images]
-    
+        pil_images = [
+            img.resize((target_w, target_h), Image.BILINEAR) if img.size != (target_w, target_h) else img
+            for img in pil_images
+        ]
+
     # Create canvas
     canvas_w = ncols * target_w + (ncols - 1) * padding
     canvas_h = nrows * target_h + (nrows - 1) * padding
     canvas = Image.new("RGB", (canvas_w, canvas_h), color=bg_color)
-    
+
     # Paste images
     for idx, img in enumerate(pil_images):
         row = idx // ncols
@@ -127,7 +131,7 @@ def save_image_grid(
         x = col * (target_w + padding)
         y = row * (target_h + padding)
         canvas.paste(img, (x, y))
-    
+
     canvas.save(out_path)
 
 
@@ -141,7 +145,7 @@ def fft_image(images):
         grayscale = 0.299 * images[:, 0] + 0.587 * images[:, 1] + 0.114 * images[:, 2]
     else:
         grayscale = images.squeeze(1)
-    
+
     high_freq_metrics = []
 
     for i in range(batch_size):

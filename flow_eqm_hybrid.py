@@ -6,7 +6,6 @@ Hybrid flow matching and EqM sampling.
 
 import torch
 
-
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
@@ -21,11 +20,9 @@ from PIL import Image
 
 from download import find_model
 from models import EqM_models
-
-from utils.sampling_utils import IntermediateImageSaver, decode_latents, sample_eqm
-from utils.arg_utils import parse_ode_args, parse_sde_args, parse_transport_args
-
 from transport import Sampler, create_transport
+from utils.arg_utils import parse_ode_args, parse_sde_args, parse_transport_args
+from utils.sampling_utils import IntermediateImageSaver, decode_latents, sample_eqm
 
 
 def main(mode, args):
@@ -256,7 +253,10 @@ if __name__ == "__main__":
         help="Optional path to a EqM checkpoint (default: auto-download a pre-trained EqM-XL/2 model).",
     )
     parser.add_argument(
-        "--output-dir", type=str, default="output/debug", help="Directory to save intermediate samples (default: samples)"
+        "--output-dir",
+        type=str,
+        default="output/debug",
+        help="Directory to save intermediate samples (default: samples)",
     )
     parser.add_argument(
         "--class-labels",
