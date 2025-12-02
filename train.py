@@ -32,6 +32,7 @@ from download import find_model
 from models import EqM_models
 from transport import create_transport
 from utils.arg_utils import (
+    parse_adv_args,
     parse_sample_args,
     parse_transport_args,
 )
@@ -169,7 +170,7 @@ def main(args):
         condition = "uncond" if args.uncond else "cond"
         experiment_name = f"{timestamp}-{model_string_name}-{condition}-{args.const_type}"
         if args.adv is not None:
-            experiment_name += f"-{args.adv}"
+            experiment_name += f"-{args.adv}-{args.adv_weight}-{args.adv_stepsize}"
         experiment_dir = f"_trained/{args.project}/{experiment_name}"
         checkpoint_dir = f"{experiment_dir}/checkpoints"
         os.makedirs(checkpoint_dir, exist_ok=True)
@@ -315,11 +316,11 @@ def main(args):
             if args.adv is not None:
                 if args.adv == "consistency":
                     # implement (f(x_fake) = - f(x))
-                    adv_kwargs = {"type": "consistency", "stepsize": 0.003}
+                    adv_kwargs = {"type": "consistency", "stepsize": args.adv_stepsize}
 
                 loss_dict_adv = transport.adv_training_losses(model, x, model_kwargs, adv_kwargs)
                 loss_adv = loss_dict_adv["loss"].mean()
-                total_loss += loss_adv
+                total_loss = total_loss + args.adv_weight * loss_adv
 
             accelerator.backward(total_loss)
             opt.step()
@@ -490,6 +491,11 @@ if __name__ == "__main__":
     group.add_argument("--timestep-analysis", action="store_true")
 
     parser.add_argument("--num-workers", type=int, default=4)
+
+    # Parse --adv first to conditionally add adv args
+    args_partial, _ = parser.parse_known_args()
+    if args_partial.adv is not None:
+        parse_adv_args(parser)
 
     args = parser.parse_args()
 

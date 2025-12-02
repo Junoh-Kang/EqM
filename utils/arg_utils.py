@@ -56,3 +56,9 @@ def parse_sample_args(parser):
     group.add_argument("--num-sampling-steps", type=int, default=500)
     group.add_argument("--stepsize", type=float, default=0.0017)  # 0.003
     group.add_argument("--sampler", type=str, default="gd", choices=["gd", "ngd"])
+
+
+def parse_adv_args(parser):
+    group = parser.add_argument_group("Adv training argument")
+    group.add_argument("--adv-stepsize", type=float, default=0.006)
+    group.add_argument("--adv-weight", type=float, default=1)
