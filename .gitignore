@@ -16,9 +16,10 @@ CLAUDE.md
 # Folders 
 .backup_local/
 .vscode/
-scripts/
-results/
-wandb/
+scripts
+results
+wandb
+
 # Etc
 fid*
 classify_image_graph_def.pb
