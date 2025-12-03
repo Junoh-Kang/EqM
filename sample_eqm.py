@@ -64,7 +64,9 @@ def main(args):
 
     # Create output directory
     os.makedirs(args.out, exist_ok=True)
-    final_step_folder = f"{args.out}/step_{args.num_sampling_steps:03d}"
+    final_step_folder = (
+        f"{args.out}/{args.sampler}-{args.stepsize}-cfg{args.cfg_scale}/step_{args.num_sampling_steps:03d}"
+    )
     os.makedirs(final_step_folder, exist_ok=True)
 
     # Calculate total samples and iterations
@@ -77,7 +79,9 @@ def main(args):
     save_steps_list = []
     if args.save_steps is not None:
         save_steps_list = [int(s.strip()) for s in args.save_steps.split(",")]
-        img_saver = IntermediateImageSaver(save_steps_list, args.out)
+        img_saver = IntermediateImageSaver(
+            save_steps_list, f"{args.out}/{args.sampler}-{args.stepsize}-cfg{args.cfg_scale}"
+        )
         hooks.append(img_saver)
         print(f"Created IntermediateImageSaver hook for steps: {save_steps_list}")
 
