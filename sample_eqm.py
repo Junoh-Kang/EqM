@@ -5,6 +5,7 @@ Uses hooks from sampling_utils.py for cleaner code.
 
 import math
 
+import numpy as np
 import torch
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -18,7 +19,61 @@ from tqdm import tqdm
 
 from download import find_model
 from models import EqM_models
-from utils.sampling_utils import GradientNormTracker, IntermediateImageSaver, create_npz_from_sample_folder, sample_eqm
+from utils.sampling_utils import (
+    GradientNormTracker,
+    IntermediateImageSaver,
+    create_npz_from_sample_folder,
+    decode_latents,
+    sample_eqm,
+)
+
+
+def load_initial_latents(latents_path, latent_size):
+    """
+    Load initial latents tensor from an .npz file using the default arr_0 key.
+    """
+    if not os.path.exists(latents_path):
+        raise FileNotFoundError(f"Initial latents file not found: {latents_path}")
+
+    with np.load(latents_path, allow_pickle=False) as npz_file:
+        if "arr_0" not in npz_file.files:
+            raise ValueError(f"'arr_0' not found in {latents_path}. Ensure the file was created with np.savez.")
+        latents = npz_file["arr_0"]
+
+    if latents.ndim != 4 or latents.shape[1:] != (4, latent_size, latent_size):
+        raise ValueError(f"Latents must have shape (N, 4, {latent_size}, {latent_size}). Got {latents.shape}.")
+
+    latents_tensor = torch.from_numpy(latents).to(torch.float32)
+    if latents_tensor.shape[0] == 0:
+        raise ValueError("Initial latents file is empty.")
+    return latents_tensor
+
+
+def load_initial_class_labels(labels_path, expected_count):
+    """
+    Load class labels (one per line) for initial latents.
+    """
+    if not os.path.exists(labels_path):
+        raise FileNotFoundError(f"Initial class labels file not found: {labels_path}")
+
+    labels = []
+    with open(labels_path, encoding="utf-8") as handle:
+        for line_idx, line in enumerate(handle, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                labels.append(int(stripped))
+            except ValueError as err:
+                raise ValueError(f"Invalid class label '{stripped}' on line {line_idx} in {labels_path}") from err
+
+    if len(labels) != expected_count:
+        raise ValueError(
+            f"Expected {expected_count} class labels, but found {len(labels)} in {labels_path}. "
+            "Ensure there is exactly one label per latent."
+        )
+
+    return torch.tensor(labels, dtype=torch.long)
 
 
 def main(args):
@@ -67,10 +122,41 @@ def main(args):
     final_step_folder = f"{args.out}/step_{args.num_sampling_steps:03d}"
     os.makedirs(final_step_folder, exist_ok=True)
 
-    # Calculate total samples and iterations
-    total_samples = int(math.ceil(args.num_samples / args.batch_size) * args.batch_size)
+    # Optionally load initial latents
+    initial_latents_tensor = None
+    initial_class_labels = None
+    if args.initial_latents is not None:
+        initial_latents_tensor = load_initial_latents(args.initial_latents, latent_size)
+        available_latents = initial_latents_tensor.shape[0]
+
+        if args.initial_class_labels is None:
+            raise ValueError("--initial-class-labels must be provided when --initial-latents is used.")
+        initial_class_labels = load_initial_class_labels(args.initial_class_labels, available_latents)
+
+        if args.class_labels is not None:
+            raise ValueError("--class-labels cannot be combined with --initial-latents. Use --initial-class-labels.")
+
+        total_samples = min(args.num_samples, available_latents)
+        if args.num_samples > available_latents:
+            print(
+                f"Requested {args.num_samples} samples but initial latents file only provides {available_latents}. "
+                "Sampling available latents and stopping."
+            )
+        elif args.num_samples < available_latents:
+            print(f"Using first {total_samples} initial latents from {args.initial_latents}")
+        else:
+            print(f"Using all {total_samples} initial latents from {args.initial_latents}")
+
+        initial_latents_tensor = initial_latents_tensor[:total_samples]
+        initial_class_labels = initial_class_labels[:total_samples]
+    else:
+        total_samples = args.num_samples
+
+    if total_samples <= 0:
+        raise ValueError("Total samples must be greater than zero.")
+
     print(f"Total number of images that will be sampled: {total_samples}")
-    iterations = int(total_samples // args.batch_size)
+    iterations = int(math.ceil(total_samples / args.batch_size))
 
     # Create hooks
     hooks = []
@@ -89,23 +175,49 @@ def main(args):
 
     # Sampling loop
     print(f"Starting sampling with {args.sampler.upper()} sampler...")
+    if initial_class_labels is None and args.class_labels is not None:
+        class_ids = [int(c.strip()) for c in args.class_labels.split(",") if c.strip()]
+        if len(class_ids) == 0:
+            raise ValueError("At least one valid class label must be provided.")
+        class_ids_tensor = torch.tensor(class_ids, device=device, dtype=torch.long)
+    else:
+        class_ids_tensor = None
+
     total_saved = 0
-    for _ in tqdm(range(iterations), desc="Generating samples"):
-        # Generate samples for this batch
-        if args.class_labels is not None:
-            class_ids = [int(c.strip()) for c in args.class_labels.split(",")]
-            class_ids_tensor = torch.tensor(class_ids, device=device, dtype=torch.long)
-            class_labels = class_ids_tensor[
-                torch.randint(0, class_ids_tensor.numel(), (args.batch_size,), device=device)
-            ]
+    for batch_idx in tqdm(range(iterations), desc="Generating samples"):
+        batch_start = batch_idx * args.batch_size
+        if batch_start >= total_samples:
+            break
+        batch_end = min(batch_start + args.batch_size, total_samples)
+        current_batch_size = batch_end - batch_start
+
+        batch_latents = None
+        if initial_latents_tensor is not None:
+            batch_latents = initial_latents_tensor[batch_start:batch_end].to(device)
+
+            # Save initial latents as images
+            initial_step_folder = f"{args.out}/step_000"
+            os.makedirs(initial_step_folder, exist_ok=True)
+            initial_images = decode_latents(vae, batch_latents)
+            for i_sample, img in enumerate(initial_images):
+                index = batch_start + i_sample
+                Image.fromarray(img).save(f"{initial_step_folder}/{index:06d}.png")
+
+        if initial_class_labels is not None:
+            class_labels = initial_class_labels[batch_start:batch_end].to(device)
+        elif class_ids_tensor is not None:
+            random_indices = torch.randint(0, class_ids_tensor.numel(), (current_batch_size,), device=device)
+            class_labels = class_ids_tensor[random_indices]
         else:
             class_labels = None
+
         samples = sample_eqm(
             model=ema_model,
             vae=vae,
             device=device,
-            batch_size=args.batch_size,
+            batch_size=current_batch_size,
             latent_size=latent_size,
+            initial_latent=batch_latents,
             class_labels=class_labels,
             num_sampling_steps=args.num_sampling_steps,
             stepsize=args.stepsize,
@@ -120,7 +232,7 @@ def main(args):
             index = total_saved + i_sample
             Image.fromarray(sample).save(f"{final_step_folder}/{index:06d}.png")
 
-        total_saved += args.batch_size
+        total_saved += current_batch_size
     print(f"Saved {total_saved} samples to {final_step_folder}")
 
     # Finalize gradient norm statistics if enabled
@@ -130,7 +242,8 @@ def main(args):
 
     # Create .npz files for FID evaluation
     print("Creating .npz file for final samples...")
-    create_npz_from_sample_folder(final_step_folder, args.num_samples)
+    npz_sample_count = min(args.num_samples, total_saved)
+    create_npz_from_sample_folder(final_step_folder, npz_sample_count)
 
     # Create .npz files for intermediate steps
     if len(save_steps_list) > 0:
@@ -139,7 +252,7 @@ def main(args):
             step_folder = f"{args.out}/step_{step:03d}"
             if os.path.exists(step_folder):
                 print(f"Creating .npz file for step {step}")
-                create_npz_from_sample_folder(step_folder, args.num_samples)
+                create_npz_from_sample_folder(step_folder, npz_sample_count)
 
     print("Done!")
 
@@ -176,6 +289,18 @@ if __name__ == "__main__":
     )
     parser.add_argument("--mu", type=float, default=0.3, help="NAG-GD momentum hyperparameter mu (default: 0.3)")
     parser.add_argument("--num-samples", type=int, required=True, help="Total number of samples to generate")
+    parser.add_argument(
+        "--initial-latents",
+        type=str,
+        default=None,
+        help="Path to a .npz file containing initial latents (expects default arr_0 key)",
+    )
+    parser.add_argument(
+        "--initial-class-labels",
+        type=str,
+        default=None,
+        help="Path to a text file with one class label per line for initial latents",
+    )
     parser.add_argument(
         "--save-steps",
         type=str,
