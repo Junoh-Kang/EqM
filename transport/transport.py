@@ -48,6 +48,7 @@ class Transport:
         train_eps,
         sample_eps,
         const_type,
+        weight_type,
     ):
         path_options = {
             PathType.LINEAR: path.ICPlan,
@@ -60,6 +61,7 @@ class Transport:
         self.train_eps = train_eps
         self.sample_eps = sample_eps
         self.const_type = const_type
+        self.weight_type = weight_type
 
     def prior_logp(self, z):
         """
@@ -132,6 +134,17 @@ class Transport:
 
         return ct
 
+    def get_loss_weight(self, t, min_val=1e-2):
+        if self.weight_type == "constant":
+            weight = th.ones_like(t)[:, None, None, None]
+        elif self.weight_type == "inverse":
+            ct = self.get_ct(t)[:, None, None, None]
+            weight = 1.0 / ct.clamp_min(min_val)[:, None, None, None]
+        else:
+            raise NotImplementedError()
+
+        return weight
+
     def training_losses(
         self,
         model,
@@ -158,12 +171,6 @@ class Transport:
         model_output = model(xt, t, **model_kwargs)
         disp_loss = 0
 
-        # breakpoint()
-        # from utils.train_utils import cosine_sim
-
-        # noise = self.velocity_to_noise(xt, model_output, t)
-        # print(f"{t} : {cosine_sim(noise, x0).mean()}")
-
         # get intermediate activation and apply Dispersive Loss
         if "return_act" in model_kwargs and model_kwargs["return_act"]:
             model_output, act = model_output
@@ -177,7 +184,8 @@ class Transport:
         terms["pred"] = model_output
 
         if self.model_type == ModelType.VELOCITY:
-            terms["loss"] = mean_flat((model_output - ut) ** 2)
+            weight = self.get_loss_weight(t, 0.01)
+            terms["loss"] = mean_flat(weight * (model_output - ut) ** 2)
         else:
             _, drift_var = self.path_sampler.compute_drift(xt, t)
             sigma_t, _ = self.path_sampler.compute_sigma_t(path.expand_t_like_x(t, xt))

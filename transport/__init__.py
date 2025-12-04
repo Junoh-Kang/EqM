@@ -8,6 +8,7 @@ def create_transport(
     train_eps=None,
     sample_eps=None,
     const_type="truncated",
+    weight_type="constant",
 ):
     """function for creating Transport object
     **Note**: model prediction defaults to velocity
@@ -62,6 +63,7 @@ def create_transport(
         train_eps=train_eps,
         sample_eps=sample_eps,
         const_type=const_type,
+        weight_type=weight_type,
     )
 
     return state

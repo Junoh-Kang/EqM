@@ -276,6 +276,7 @@ def main(args):
         args.train_eps,
         args.sample_eps,
         args.const_type,
+        args.weight_type,
     )  # default: velocity;
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
     logger.info(f"EqM Parameters: {sum(p.numel() for p in model.parameters()):,}")

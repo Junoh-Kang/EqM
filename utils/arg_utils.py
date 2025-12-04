@@ -12,6 +12,7 @@ def parse_transport_args(parser):
     group.add_argument("--sample-eps", type=float)
     group.add_argument("--train-eps", type=float)
     group.add_argument("--const-type", type=str, default="truncated", choices=["truncated", "constant"])
+    group.add_argument("--weight-type", type=str, default="constant", choices=["constant", "inverse"])
 
 
 def parse_ode_args(parser):
