@@ -16,6 +16,13 @@ def mean_flat(x):
     return torch.mean(x, dim=list(range(1, len(x.size()))))
 
 
+def cosine_sim(x, y):
+    x_flat = x.reshape(x.size(0), -1)
+    y_flat = y.reshape(y.size(0), -1)
+    cos_sim = torch.sum(x_flat * y_flat, dim=1) / (x_flat.norm(dim=1) * y_flat.norm(dim=1) + 1e-8)
+    return cos_sim
+
+
 class TimestepValueLogger:
     """
     Stores per-metric, per-timestep value lists for later aggregation/logging.

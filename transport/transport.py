@@ -158,6 +158,12 @@ class Transport:
         model_output = model(xt, t, **model_kwargs)
         disp_loss = 0
 
+        # breakpoint()
+        # from utils.train_utils import cosine_sim
+
+        # noise = self.velocity_to_noise(xt, model_output, t)
+        # print(f"{t} : {cosine_sim(noise, x0).mean()}")
+
         # get intermediate activation and apply Dispersive Loss
         if "return_act" in model_kwargs and model_kwargs["return_act"]:
             model_output, act = model_output
@@ -190,6 +196,9 @@ class Transport:
                 terms["loss"] = mean_flat(weight * ((model_output * sigma_t + x0) ** 2))
         terms["loss"] += 0.5 * disp_loss
         return terms
+
+    def velocity_to_noise(self, xt, model_output, t):
+        return xt - t[:, None, None, None] * model_output / self.get_ct(t)[:, None, None, None]
 
     def adv_training_losses(
         self,
