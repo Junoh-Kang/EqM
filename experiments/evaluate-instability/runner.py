@@ -14,12 +14,15 @@ from csv import DictWriter
 from dataclasses import asdict
 from statistics import mean, pstdev
 
+import matplotlib.pyplot as plt
 import torch
 from diffusers.models import AutoencoderKL
+from PIL import Image
 from tqdm import tqdm
 
 from download import find_model
 from models import EqM_models
+from utils.sampling_utils import decode_latents
 
 from .data import build_latent_cache
 from .field import EqMField
@@ -46,6 +49,53 @@ def _trajectory_curvature(history: torch.Tensor) -> torch.Tensor:
         denominator = _batch_l2(next_state - curr_state).clamp_min(GT_EPS)
         curvature = curvature + numerator / denominator
     return curvature
+
+
+def _normalize_step_list(step_arg: str | list[int] | None) -> list[int]:
+    """
+    Normalize user-provided trajectory step arguments into a sorted, unique list.
+    Accepts comma-separated strings or iterables of ints.
+    """
+    if step_arg is None:
+        return []
+    if isinstance(step_arg, str):
+        tokens = [token.strip() for token in step_arg.split(",")]
+    else:
+        tokens = step_arg
+    normalized: set[int] = set()
+    for token in tokens:
+        if token is None or token == "":
+            continue
+        try:
+            value = int(token)
+        except ValueError as exc:
+            raise ValueError(f"Invalid trajectory image step '{token}'.") from exc
+        if value < 0:
+            raise ValueError("Trajectory image steps must be non-negative integers.")
+        normalized.add(value)
+    return sorted(normalized)
+
+
+def _save_selected_step_images(
+    history_tensor: torch.Tensor,
+    steps: list[int],
+    vae: AutoencoderKL,
+    image_root: str,
+    dataset_indices: torch.Tensor,
+) -> None:
+    """Decode selected trajectory steps and persist images to disk."""
+    if not steps:
+        return
+    dataset_indices_cpu = dataset_indices.to("cpu")
+    for step in steps:
+        latents = history_tensor[step].to(vae.device)
+        decoded_images = decode_latents(vae, latents)
+        step_dir = os.path.join(image_root, f"step_{step:03d}")
+        os.makedirs(step_dir, exist_ok=True)
+        for image_array, dataset_index in zip(decoded_images, dataset_indices_cpu):
+            file_index = int(dataset_index)
+            image_path = os.path.join(step_dir, f"{file_index:06d}.png")
+            Image.fromarray(image_array).save(image_path)
 
 
 def _compute_ground_truth_metrics(
@@ -92,6 +142,53 @@ def _save_results(records: list[dict[str, float | int]], out_dir: str) -> None:
         }
     with open(summary_path, "w", encoding="utf-8") as fout:
         json.dump(summary, fout, indent=2)
+
+
+def _plot_long_drift_correlations(records: list[dict[str, float | int]], out_dir: str) -> None:
+    if not records:
+        return
+    metric_columns = [c for c in records[0].keys() if c not in ("dataset_index", "class_label")]
+    if "gt_long_drift" not in metric_columns:
+        print("gt_long_drift missing; skipping correlation plots.")
+        return
+
+    metrics = [name for name in metric_columns if name != "gt_long_drift"]
+    if not metrics:
+        return
+
+    gt_values = torch.tensor([float(rec["gt_long_drift"]) for rec in records], dtype=torch.float32)
+    cols = min(3, len(metrics))
+    rows = math.ceil(len(metrics) / cols)
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 4, rows * 3), squeeze=False)
+    flat_axes = axes.flatten()
+
+    gt_np = gt_values.numpy()
+    mean_centered_gt = gt_values - gt_values.mean()
+
+    for idx, metric_name in enumerate(metrics):
+        metric_values = torch.tensor([float(rec[metric_name]) for rec in records], dtype=torch.float32)
+        centered_metric = metric_values - metric_values.mean()
+        denom = torch.sqrt(centered_metric.square().sum() * mean_centered_gt.square().sum())
+        if denom.item() > 0:
+            corr = float(centered_metric.mul(mean_centered_gt).sum() / denom)
+        else:
+            corr = float("nan")
+
+        ax = flat_axes[idx]
+        ax.scatter(gt_np, metric_values.numpy(), s=8, alpha=0.6)
+        ax.set_xlabel("gt_long_drift")
+        ax.set_ylabel(metric_name)
+        corr_str = "nan" if math.isnan(corr) else f"{corr:.2f}"
+        ax.set_title(f"corr={corr_str}")
+
+    for idx in range(len(metrics), len(flat_axes)):
+        fig.delaxes(flat_axes[idx])
+
+    fig.tight_layout()
+    plot_path = os.path.join(out_dir, "long_drift_correlations.png")
+    fig.savefig(plot_path, dpi=200)
+    plt.close(fig)
+    print(f"Saved correlation plot to {plot_path}")
 
 
 def _load_eqm_model(args, device: torch.device):
@@ -188,6 +285,19 @@ def run_experiment(args) -> None:
     total_batches = math.ceil(len(latent_cache) / args.batch_size)
     iterator = latent_cache.iter_batches(args.batch_size, device=device)
 
+    raw_image_steps = getattr(args, "trajectory_image_steps", None)
+    trajectory_image_steps = _normalize_step_list(raw_image_steps)
+    if trajectory_image_steps:
+        max_history_step = args.gt_steps
+        invalid_steps = [step for step in trajectory_image_steps if step > max_history_step]
+        if invalid_steps:
+            print(f"Skipping trajectory image steps beyond gt-steps ({args.gt_steps}): {invalid_steps}")
+            trajectory_image_steps = [step for step in trajectory_image_steps if step <= max_history_step]
+    image_root = None
+    if trajectory_image_steps:
+        image_root = os.path.join(args.out, "trajectory_images")
+        os.makedirs(image_root, exist_ok=True)
+
     traj_dir = None
     if args.save_trajectories:
         traj_dir = os.path.join(args.out, "trajectories")
@@ -195,8 +305,9 @@ def run_experiment(args) -> None:
 
     records: list[dict[str, float | int]] = []
     for batch_idx, batch in enumerate(tqdm(iterator, total=total_batches, desc="Batches")):
+        print(f"Batch {batch_idx} of {total_batches}")
         local_metrics = metric_suite.compute(batch.latents, batch.labels)
-        # gt_metrics, history_tensor = _compute_ground_truth_metrics(field, batch.latents, batch.labels, args.gt_steps)
+        gt_metrics, history_tensor = _compute_ground_truth_metrics(field, batch.latents, batch.labels, args.gt_steps)
 
         batch_size = batch.latents.shape[0]
         for sample_idx in range(batch_size):
@@ -206,18 +317,27 @@ def run_experiment(args) -> None:
             }
             for name, tensor in local_metrics.items():
                 record[name] = float(tensor[sample_idx].item())
-            # for name, tensor in gt_metrics.items():
-            #     record[name] = float(tensor[sample_idx].item())
+            for name, tensor in gt_metrics.items():
+                record[name] = float(tensor[sample_idx].item())
             records.append(record)
 
-        # if traj_dir is not None:
-        #     torch.save(
-        #         {
-        #             "indices": batch.indices.clone(),
-        #             "history": history_tensor.clone(),
-        #         },
-        #         os.path.join(traj_dir, f"batch_{batch_idx:04d}.pt"),
-        #     )
+        if traj_dir is not None:
+            torch.save(
+                {
+                    "indices": batch.indices.clone(),
+                    "history": history_tensor.clone(),
+                },
+                os.path.join(traj_dir, f"batch_{batch_idx:04d}.pt"),
+            )
+        if trajectory_image_steps:
+            _save_selected_step_images(
+                history_tensor=history_tensor,
+                steps=trajectory_image_steps,
+                vae=vae,
+                image_root=image_root,
+                dataset_indices=batch.indices,
+            )
 
     _save_results(records, args.out)
+    _plot_long_drift_correlations(records, args.out)
     print(f"Saved metrics to {args.out}")

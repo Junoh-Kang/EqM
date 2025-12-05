@@ -35,6 +35,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Save per-batch latent trajectories used for ground-truth metrics",
     )
+    parser.add_argument(
+        "--trajectory-image-steps",
+        type=str,
+        default=None,
+        help="Comma-separated trajectory steps (e.g., '0,50,100') to decode and save as PNGs",
+    )
 
     # Model configuration
     parser.add_argument("--model", type=str, choices=list(EqM_models.keys()), default="EqM-XL/2")
