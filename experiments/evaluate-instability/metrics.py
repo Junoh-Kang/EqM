@@ -6,6 +6,9 @@ a pandas/JSON table without extra bookkeeping.
 
 Refactored to use torch.func (jvp, vjp) for explicit and efficient
 Jacobian-vector products.
+
+All torch.func.jvp calls stay inside sdpa_kernel(SDPBackend.MATH) contexts to
+avoid the "forward-mode AD not implemented" runtime error.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from typing import Callable
 
 import torch
 from torch.func import jvp, vjp
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from .field import EqMField
 
@@ -65,33 +69,38 @@ class LocalMetricSuite:
 
         results: dict[str, torch.Tensor] = {}
 
-        import ipdb
+        results["divergence_hutchinson"] = self._detach_to_cpu(
+            hutchinson_divergence(self.field, latents, labels, self.config.hutchinson_samples)
+        )
+        results["jacobian_lambda_max"] = self._detach_to_cpu(
+            largest_jacobian_eigenvalue(self.field, latents, labels, self.config.eigen_iters)
+        )
+        results["one_step_amplification"] = self._detach_to_cpu(one_step_amplification(self.field, latents, labels))
+        results["empirical_perturbation"] = self._detach_to_cpu(
+            empirical_perturbation_instability(
+                self.field, latents, labels, self.config.perturb_steps, self.config.perturb_sigma
+            )
+        )
+        results["symmetric_jacobian_error"] = self._detach_to_cpu(
+            symmetric_jacobian_error(self.field, latents, labels, self.config.symmetry_probes)
+        )
+        results["cycle_consistency"] = self._detach_to_cpu(
+            cycle_consistency_error(self.field, latents, labels, self.config.cycle_stepsize)
+        )
+        results["local_flow_dispersion"] = self._detach_to_cpu(
+            local_flow_dispersion(
+                self.field,
+                latents,
+                labels,
+                self.config.dispersion_dirs,
+                self.config.dispersion_steps,
+                self.config.dispersion_delta,
+            )
+        )
+        return results
 
-        ipdb.set_trace()
-
-        results["divergence_hutchinson"] = hutchinson_divergence(
-            self.field, latents, labels, self.config.hutchinson_samples
-        )
-        results["jacobian_lambda_max"] = largest_jacobian_eigenvalue(
-            self.field, latents, labels, self.config.eigen_iters
-        )
-        results["one_step_amplification"] = one_step_amplification(self.field, latents, labels)
-        results["empirical_perturbation"] = empirical_perturbation_instability(
-            self.field, latents, labels, self.config.perturb_steps, self.config.perturb_sigma
-        )
-        results["symmetric_jacobian_error"] = symmetric_jacobian_error(
-            self.field, latents, labels, self.config.symmetry_probes
-        )
-        results["cycle_consistency"] = cycle_consistency_error(self.field, latents, labels, self.config.cycle_stepsize)
-        results["local_flow_dispersion"] = local_flow_dispersion(
-            self.field,
-            latents,
-            labels,
-            self.config.dispersion_dirs,
-            self.config.dispersion_steps,
-            self.config.dispersion_delta,
-        )
-        return {name: tensor.detach().to("cpu") for name, tensor in results.items()}
+    def _detach_to_cpu(self, tensor: torch.Tensor) -> torch.Tensor:
+        return tensor.detach().to("cpu")
 
 
 def _make_func(field: EqMField, labels: torch.Tensor) -> Callable[[torch.Tensor], torch.Tensor]:
@@ -103,6 +112,7 @@ def _make_func(field: EqMField, labels: torch.Tensor) -> Callable[[torch.Tensor]
     return func
 
 
+@torch.no_grad()
 def hutchinson_divergence(
     field: EqMField,
     latents: torch.Tensor,
@@ -139,6 +149,7 @@ def hutchinson_divergence(
     return acc / float(num_samples)
 
 
+@torch.no_grad()
 def largest_jacobian_eigenvalue(
     field: EqMField,
     latents: torch.Tensor,
@@ -158,18 +169,21 @@ def largest_jacobian_eigenvalue(
     v = _normalize_batch(v)
 
     # Power iteration: v_{k+1} = J v_k / ||J v_k||
-    for _ in range(max(1, num_iters)):
-        _, jv = jvp(func, (xt,), (v,))
+    for _iter_idx in range(max(1, num_iters)):
+        with sdpa_kernel(SDPBackend.MATH):
+            _, jv = jvp(func, (xt,), (v,))
         v = _normalize_batch(jv)
 
     # Rayleigh quotient: (v^T J v) / (v^T v)
     # Since v is normalized, denominator is 1.
-    _, final_jv = jvp(func, (xt,), (v,))
+    with sdpa_kernel(SDPBackend.MATH):
+        _, final_jv = jvp(func, (xt,), (v,))
     numerator = _batch_inner(v, final_jv)
 
     return numerator
 
 
+@torch.no_grad()
 def one_step_amplification(field: EqMField, latents: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     """
     Closed-form amplification score for a single EqM step.
@@ -182,6 +196,7 @@ def one_step_amplification(field: EqMField, latents: torch.Tensor, labels: torch
     return field.stepsize * numerator / denominator
 
 
+@torch.no_grad()
 def empirical_perturbation_instability(
     field: EqMField,
     latents: torch.Tensor,
@@ -199,6 +214,7 @@ def empirical_perturbation_instability(
     return _batch_norm(pert_result.final_latents - base_result.final_latents)
 
 
+@torch.no_grad()
 def symmetric_jacobian_error(
     field: EqMField,
     latents: torch.Tensor,
@@ -221,17 +237,19 @@ def symmetric_jacobian_error(
     xt = latents.detach().to(field.device)
     estimates = torch.zeros(latents.shape[0], device=field.device)
 
-    for _ in range(num_probes):
+    _, vjp_fn = vjp(func, xt)
+
+    for _probe_idx in range(num_probes):
         # Random probe v
         # We need f(x) to get the shape, or just use randn_like(xt) assuming output shape == input shape
         # (EqM fields are R^d -> R^d)
         v = _normalize_batch(torch.randn_like(xt))
 
         # Compute J v (Forward Mode)
-        _, jv = jvp(func, (xt,), (v,))
+        with sdpa_kernel(SDPBackend.MATH):
+            _, jv = jvp(func, (xt,), (v,))
 
         # Compute J^T v (Reverse Mode)
-        _, vjp_fn = vjp(func, xt)
         jtv = vjp_fn(v)[0]
 
         antisym = jv - jtv
@@ -242,6 +260,7 @@ def symmetric_jacobian_error(
     return estimates / float(num_probes)
 
 
+@torch.no_grad()
 def cycle_consistency_error(
     field: EqMField,
     latents: torch.Tensor,
@@ -263,6 +282,7 @@ def cycle_consistency_error(
     return _batch_norm(backward - base)
 
 
+@torch.no_grad()
 def local_flow_dispersion(
     field: EqMField,
     latents: torch.Tensor,
