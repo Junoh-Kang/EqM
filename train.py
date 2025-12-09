@@ -168,7 +168,7 @@ def main(args):
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         model_string_name = args.model.replace("/", "-")  # e.g., SiT-XL/2 --> SiT-XL-2 (for naming folders)
         condition = "uncond" if args.uncond else "cond"
-        experiment_name = f"{timestamp}-{model_string_name}-{condition}-{args.const_type}"
+        experiment_name = f"{timestamp}-{model_string_name}-{condition}-{args.const_type}_{args.max_const}-{args.weight_type}_{args.max_weight}"
         if args.adv is not None:
             experiment_name += f"-{args.adv}-{args.adv_weight}-{args.adv_stepsize}"
         experiment_dir = f"_trained/{args.project}/{experiment_name}"
@@ -278,6 +278,9 @@ def main(args):
         args.const_type,
         args.weight_type,
     )  # default: velocity;
+    transport.set_max_const(args.max_const)
+    transport.set_max_weight(args.max_weight)
+
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
     logger.info(f"EqM Parameters: {sum(p.numel() for p in model.parameters()):,}")
 

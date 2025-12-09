@@ -11,8 +11,10 @@ def parse_transport_args(parser):
     group.add_argument("--loss-weight", type=none_or_str, default=None, choices=[None, "velocity", "likelihood"])
     group.add_argument("--sample-eps", type=float)
     group.add_argument("--train-eps", type=float)
-    group.add_argument("--const-type", type=str, default="truncated", choices=["truncated", "constant"])
+    group.add_argument("--const-type", type=str, default="truncated", choices=["truncated", "constant", "linear"])
+    group.add_argument("--max-const", type=float, default=1.0)
     group.add_argument("--weight-type", type=str, default="constant", choices=["constant", "inverse"])
+    group.add_argument("--max-weight", type=float, default=10.0)
 
 
 def parse_ode_args(parser):
@@ -52,7 +54,7 @@ def parse_sde_args(parser):
 
 def parse_sample_args(parser):
     group = parser.add_argument_group("Sampling arguments")
-    group.add_argument("--num-samples", type=int, default=32)
+    group.add_argument("--num-samples", type=int, default=64)
     group.add_argument("--cfg-scale", type=float, default=4.0)
     group.add_argument("--num-sampling-steps", type=int, default=500)
     group.add_argument("--stepsize", type=float, default=0.0017)  # 0.003
