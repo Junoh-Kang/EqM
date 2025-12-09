@@ -194,7 +194,7 @@ class Transport:
         terms["pred"] = model_output
 
         if self.model_type == ModelType.VELOCITY:
-            weight = self.get_loss_weight(t, 0.01)
+            weight = self.get_loss_weight(t)
             terms["loss"] = mean_flat(weight * (model_output - ut) ** 2)
         else:
             _, drift_var = self.path_sampler.compute_drift(xt, t)
