@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 from download import find_model
 from models import EqM_models
 from utils.sampling_utils import (
+    GradientNormTracker,
     IntermediateImageSaver,
     SamplingHookContext,
     create_npz_from_sample_folder,
@@ -82,6 +83,7 @@ def run_baseline_and_capture(
     output_folder,
     batch_size,
     num_samples,
+    track_grad_norm=False,
 ):
     """
     Run baseline with cfg_scale for all steps and capture intermediate latents.
@@ -99,6 +101,12 @@ def run_baseline_and_capture(
 
     # Store captured latents per switch step
     all_captured = {step: [] for step in switch_steps}
+
+    # Create gradient tracker (persistent across batches)
+    grad_tracker = None
+    if track_grad_norm:
+        grad_tracker = GradientNormTracker(num_sampling_steps)
+        print("Created GradientNormTracker hook for baseline")
 
     total_saved = 0
     for batch_idx in tqdm(range(iterations), desc="Baseline CFG"):
@@ -120,6 +128,10 @@ def run_baseline_and_capture(
         if save_steps_list:
             img_saver = IntermediateImageSaver(save_steps_list, output_folder)
             hooks.append(img_saver)
+
+        # Gradient norm tracker hook
+        if grad_tracker is not None:
+            hooks.append(grad_tracker)
 
         samples = sample_eqm(
             model=model,
@@ -158,7 +170,19 @@ def run_baseline_and_capture(
             if os.path.exists(step_folder):
                 create_npz_from_sample_folder(step_folder, num_samples)
 
-    return all_captured
+    # Finalize gradient norm tracking
+    if grad_tracker is not None:
+        # Create args-like object for finalize
+        class GradArgs:
+            pass
+
+        grad_args = GradArgs()
+        grad_args.num_sampling_steps = num_sampling_steps
+        grad_args.stepsize = stepsize
+        grad_args.sampler = sampler
+        grad_tracker.finalize(grad_args, output_folder)
+
+    return all_captured, grad_tracker
 
 
 def run_switch_experiment(
@@ -176,6 +200,8 @@ def run_switch_experiment(
     output_folder,
     batch_size,
     num_samples,
+    track_grad_norm=False,
+    baseline_grad_tracker=None,
 ):
     """
     Run switch experiment: start from captured latent at switch_step,
@@ -194,6 +220,17 @@ def run_switch_experiment(
             if s > switch_step:
                 adjusted_save_steps.append(s - switch_step)
 
+    # Create gradient tracker (persistent across batches)
+    grad_tracker = None
+    if track_grad_norm:
+        grad_tracker = GradientNormTracker(remaining_steps)
+        print(f"Created GradientNormTracker hook for switch_{switch_step}")
+
+    # Create image saver (persistent across batches)
+    img_saver = None
+    if adjusted_save_steps:
+        img_saver = IntermediateImageSaver(adjusted_save_steps, output_folder)
+
     total_saved = 0
     for _, batch_latent in enumerate(tqdm(captured_latents, desc=f"Switch {switch_step}")):
         batch_latent = batch_latent.to(device)
@@ -204,10 +241,12 @@ def run_switch_experiment(
 
         # Create hooks
         hooks = []
-        if adjusted_save_steps:
-            # Custom saver that maps adjusted steps back to original steps
-            img_saver = IntermediateImageSaver(adjusted_save_steps, output_folder)
+        if img_saver is not None:
             hooks.append(img_saver)
+
+        # Gradient norm tracker hook
+        if grad_tracker is not None:
+            hooks.append(grad_tracker)
 
         samples = sample_eqm(
             model=model,
@@ -233,17 +272,35 @@ def run_switch_experiment(
         total_saved += actual_batch_size
 
     print(f"Saved {total_saved} samples to {final_step_folder}")
-    create_npz_from_sample_folder(final_step_folder, num_samples)
+    create_npz_from_sample_folder(final_step_folder, total_saved)
 
     # Rename intermediate step folders to match original step numbering
-    if adjusted_save_steps:
+    if img_saver is not None:
         for adj_step in adjusted_save_steps:
             orig_step = adj_step + switch_step
             src_folder = f"{output_folder}/step_{adj_step:03d}"
             dst_folder = f"{output_folder}/step_{orig_step:04d}"
             if os.path.exists(src_folder):
                 os.rename(src_folder, dst_folder)
-                create_npz_from_sample_folder(dst_folder, num_samples)
+                step_count = img_saver.step_counters[adj_step]
+                create_npz_from_sample_folder(dst_folder, step_count)
+
+    # Finalize gradient norm tracking
+    if grad_tracker is not None:
+        # Prepend baseline gradient norms to get full trajectory
+        if baseline_grad_tracker is not None:
+            baseline_norms = baseline_grad_tracker.gradient_norms[:switch_step]
+            grad_tracker.gradient_norms = baseline_norms + grad_tracker.gradient_norms
+
+        # Create args-like object for finalize
+        class GradArgs:
+            pass
+
+        grad_args = GradArgs()
+        grad_args.num_sampling_steps = num_sampling_steps  # Full trajectory length
+        grad_args.stepsize = stepsize
+        grad_args.sampler = sampler
+        grad_tracker.finalize(grad_args, output_folder)
 
 
 def main(args):
@@ -331,6 +388,7 @@ def main(args):
         "class_labels_arg": args.class_labels,
         "uncond": args.uncond,
         "ebm": args.ebm,
+        "track_grad_norm": args.track_grad_norm,
     }
     with open(f"{args.out}/metadata.json", "w") as f:
         json.dump(metadata, f, indent=2)
@@ -340,7 +398,7 @@ def main(args):
     print(f"\n{'=' * 60}")
     print(f"Running baseline with cfg_scale={args.cfg_scale} (capturing latents at switch steps)")
     print(f"{'=' * 60}")
-    captured_latents = run_baseline_and_capture(
+    captured_latents, baseline_grad_tracker = run_baseline_and_capture(
         model=ema_model,
         vae=vae,
         device=device,
@@ -357,6 +415,7 @@ def main(args):
         output_folder=f"{args.out}/baseline_cfg{args.cfg_scale}",
         batch_size=args.batch_size,
         num_samples=args.num_samples,
+        track_grad_norm=args.track_grad_norm,
     )
 
     # Run switch experiments using captured latents
@@ -379,6 +438,8 @@ def main(args):
             output_folder=f"{args.out}/switch_{switch_step:04d}",
             batch_size=args.batch_size,
             num_samples=args.num_samples,
+            track_grad_norm=args.track_grad_norm,
+            baseline_grad_tracker=baseline_grad_tracker,
         )
 
     print("\nAll experiments completed!")
@@ -423,6 +484,9 @@ if __name__ == "__main__":
         type=str,
         required=True,
         help="Comma-separated list of steps at which to switch to null-only",
+    )
+    parser.add_argument(
+        "--track-grad-norm", action="store_true", help="Enable gradient norm tracking and visualization"
     )
     parser.add_argument("--uncond", type=bool, default=True, help="Enable noise conditioning")
     parser.add_argument(
