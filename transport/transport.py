@@ -48,6 +48,7 @@ class Transport:
         train_eps,
         sample_eps,
         const_type,
+        weight_type,
     ):
         path_options = {
             PathType.LINEAR: path.ICPlan,
@@ -60,6 +61,15 @@ class Transport:
         self.train_eps = train_eps
         self.sample_eps = sample_eps
         self.const_type = const_type
+        self.weight_type = weight_type
+        self.max_const = 1.0
+        self.max_weight = 10.0
+
+    def set_max_const(self, max_val):
+        self.max_const = max_val
+
+    def set_max_weight(self, max_val):
+        self.max_weight = max_val
 
     def prior_logp(self, z):
         """
@@ -124,13 +134,26 @@ class Transport:
         if self.const_type == "truncated":
             interp = 0.8
             start = 1.0
-            ct = th.minimum(start - (start - 1) / (interp) * t, 1 / (1 - interp) - 1 / (1 - interp) * t) * 4
+            ct = th.minimum(start - (start - 1) / (interp) * t, 1 / (1 - interp) - 1 / (1 - interp) * t)
+        elif self.const_type == "linear":
+            ct = th.ones_like(t) - t
         elif self.const_type == "constant":
             ct = th.ones_like(t)
         else:
             raise NotImplementedError()
 
-        return ct
+        return ct * self.max_const
+
+    def get_loss_weight(self, t):
+        if self.weight_type == "constant":
+            weight = th.ones_like(t)[:, None, None, None]
+        elif self.weight_type == "inverse":
+            ct = self.get_ct(t)[:, None, None, None]
+            weight = self.max_const / ct.clamp_min(1 / self.max_weight)[:, None, None, None]
+        else:
+            raise NotImplementedError()
+
+        return weight
 
     def training_losses(
         self,
@@ -171,7 +194,8 @@ class Transport:
         terms["pred"] = model_output
 
         if self.model_type == ModelType.VELOCITY:
-            terms["loss"] = mean_flat((model_output - ut) ** 2)
+            weight = self.get_loss_weight(t)
+            terms["loss"] = mean_flat(weight * (model_output - ut) ** 2)
         else:
             _, drift_var = self.path_sampler.compute_drift(xt, t)
             sigma_t, _ = self.path_sampler.compute_sigma_t(path.expand_t_like_x(t, xt))
@@ -190,6 +214,9 @@ class Transport:
                 terms["loss"] = mean_flat(weight * ((model_output * sigma_t + x0) ** 2))
         terms["loss"] += 0.5 * disp_loss
         return terms
+
+    def velocity_to_noise(self, xt, model_output, t):
+        return xt - t[:, None, None, None] * model_output / self.get_ct(t)[:, None, None, None]
 
     def adv_training_losses(
         self,
