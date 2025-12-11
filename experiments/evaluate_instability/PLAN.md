@@ -60,7 +60,7 @@ div = torch.autograd.grad(dot, x, create_graph=False)[0].dot(v)
 
 **This is definitely the most practical method for your setting.**
 
----
+
 
 ## 2. Largest Jacobian eigenvalue via power iteration (approximate Lyapunov exponent)
 
@@ -121,7 +121,7 @@ even near data points.
 
 This method diagnoses them precisely.
 
----
+
 
 ## 3. One-step instability / amplification metric (ultra-cheap)
 
@@ -144,7 +144,7 @@ If multiple small steps cause the image to rapidly drift → unstable region.
 
 But it only measures "force magnitude", not curvature.
 
----
+
 
 ## 4. Empirical perturbation instability (cheap but approximate)
 
@@ -254,7 +254,7 @@ D_{\text{drift}}(x)=|x_K - x_0|_2
 Pros: direct interpretation.
 Cons: global, expensive, non-local.
 
----
+
 
 ## 2. Long-horizon divergence from nearby perturbations
 
@@ -278,7 +278,7 @@ Interpretation:
 
 This is a discrete approximation of **Lyapunov instability**.
 
----
+
 
 ## 3. Multi-step amplification of random noise directions
 
@@ -302,7 +302,7 @@ GT instability could be:
 
 This captures sensitivity to perturbations in arbitrary directions.
 
----
+
 
 ## 4. Trajectory curvature / bending
 
@@ -316,4 +316,4 @@ High curvature → unstable or inconsistent vector field.
 
 This is a very powerful GT metric because it measures **non-conservativeness** of f(x).
 
----
+
