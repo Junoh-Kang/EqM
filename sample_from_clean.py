@@ -169,7 +169,7 @@ def main(args):
     hooks = []
 
     if len(save_steps_list) > 0:
-        img_saver = IntermediateImageSaver(save_steps_list, args.out)
+        img_saver = IntermediateImageSaver(save_steps_list, output_folder=args.out)
         hooks.append(img_saver)
         print(f"Created IntermediateImageSaver hook for steps: {save_steps_list}")
 

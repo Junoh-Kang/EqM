@@ -77,7 +77,7 @@ def main(args):
     save_steps_list = []
     if args.save_steps is not None:
         save_steps_list = [int(s.strip()) for s in args.save_steps.split(",")]
-        img_saver = IntermediateImageSaver(save_steps_list, args.out)
+        img_saver = IntermediateImageSaver(save_steps_list, output_folder=args.out)
         hooks.append(img_saver)
         print(f"Created IntermediateImageSaver hook for steps: {save_steps_list}")
 

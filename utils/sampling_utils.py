@@ -89,7 +89,7 @@ def sample_eqm(
         >>>
         >>> # With hooks for monitoring
         >>> from sampling_utils import IntermediateImageSaver, GradientNormTracker
-        >>> img_hook = IntermediateImageSaver([0, 50, 100, 249], "outputs")
+        >>> img_hook = IntermediateImageSaver([0, 50, 100, 249], output_folder="outputs")
         >>> grad_hook = GradientNormTracker(num_sampling_steps=250)
         >>> samples = sample_eqm(model, vae, device, batch_size=16, latent_size=32, hooks=[img_hook, grad_hook])
         >>> grad_hook.finalize("outputs", num_sampling_steps=250, stepsize=1.0, sampler="euler")
