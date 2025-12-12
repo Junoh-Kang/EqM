@@ -20,7 +20,6 @@ import argparse
 import json
 import math
 import os
-import sys
 
 import numpy as np
 import torch
@@ -29,11 +28,7 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
 from diffusers.models import AutoencoderKL
-from PIL import Image
 from tqdm import tqdm
-
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 from download import find_model
 from models import EqM_models
@@ -67,23 +62,23 @@ class LatentCaptureHook:
 
 
 def run_baseline_and_capture(
-    model,
-    vae,
-    device,
-    initial_latent,
-    class_labels,
-    latent_size,
-    num_sampling_steps,
-    stepsize,
-    cfg_scale,
-    sampler,
-    mu,
-    save_steps_list,
-    switch_steps,
-    output_folder,
-    batch_size,
-    num_samples,
-    track_grad_norm=False,
+    model: torch.nn.Module,
+    vae: AutoencoderKL,
+    device: torch.device,
+    initial_latent: torch.Tensor,
+    class_labels: torch.Tensor,
+    latent_size: int,
+    num_sampling_steps: int,
+    stepsize: float,
+    cfg_scale: float,
+    sampler: str,
+    mu: float,
+    save_steps_list: list[int],
+    switch_steps: list[int],
+    output_folder: str,
+    batch_size: int,
+    num_samples: int,
+    track_grad_norm: bool = False,
 ):
     """
     Run baseline with cfg_scale for all steps and capture intermediate latents.
@@ -93,21 +88,29 @@ def run_baseline_and_capture(
     """
     os.makedirs(output_folder, exist_ok=True)
 
-    final_step_folder = f"{output_folder}/step_{num_sampling_steps:04d}"
-    os.makedirs(final_step_folder, exist_ok=True)
-
     total_samples = int(math.ceil(num_samples / batch_size) * batch_size)
     iterations = int(total_samples // batch_size)
 
     # Store captured latents per switch step
     all_captured = {step: [] for step in switch_steps}
 
-    # Create gradient tracker (persistent across batches)
+    # Create hooks
+    hooks = []
+
+    capture_hook = LatentCaptureHook(switch_steps)
+    hooks.append(capture_hook)
+
+    if num_sampling_steps not in save_steps_list:
+        save_steps_list.append(num_sampling_steps)
+    img_saver = IntermediateImageSaver(save_steps_list, output_folder=output_folder)
+    hooks.append(img_saver)
+
     grad_tracker = None
     if track_grad_norm:
         grad_tracker = GradientNormTracker(num_sampling_steps)
-        print("Created GradientNormTracker hook for baseline")
+        hooks.append(grad_tracker)
 
+    # Sampling loop
     total_saved = 0
     for batch_idx in tqdm(range(iterations), desc="Baseline CFG"):
         batch_start = batch_idx * batch_size
@@ -117,23 +120,7 @@ def run_baseline_and_capture(
         batch_latent = initial_latent[batch_start:batch_end]
         batch_labels = class_labels[batch_start:batch_end]
 
-        # Create hooks
-        hooks = []
-
-        # Capture hook for switch steps
-        capture_hook = LatentCaptureHook(switch_steps)
-        hooks.append(capture_hook)
-
-        # Image saver hook
-        if save_steps_list:
-            img_saver = IntermediateImageSaver(save_steps_list, output_folder)
-            hooks.append(img_saver)
-
-        # Gradient norm tracker hook
-        if grad_tracker is not None:
-            hooks.append(grad_tracker)
-
-        samples = sample_eqm(
+        sample_eqm(
             model=model,
             vae=vae,
             device=device,
@@ -154,83 +141,63 @@ def run_baseline_and_capture(
             if step in capture_hook.captured_latents:
                 all_captured[step].append(capture_hook.captured_latents[step].cpu())
 
-        # Save final samples
-        for i_sample, sample in enumerate(samples):
-            index = total_saved + i_sample
-            Image.fromarray(sample).save(f"{final_step_folder}/{index:06d}.png")
-
         total_saved += actual_batch_size
-
-    print(f"Saved {total_saved} samples to {final_step_folder}")
-    create_npz_from_sample_folder(final_step_folder, num_samples)
 
     if save_steps_list:
         for step in save_steps_list:
-            step_folder = f"{output_folder}/step_{step:04d}"
+            step_folder = f"{output_folder}/step_{step:03d}"
             if os.path.exists(step_folder):
                 create_npz_from_sample_folder(step_folder, num_samples)
 
     # Finalize gradient norm tracking
     if grad_tracker is not None:
         # Create args-like object for finalize
-        class GradArgs:
-            pass
-
-        grad_args = GradArgs()
-        grad_args.num_sampling_steps = num_sampling_steps
-        grad_args.stepsize = stepsize
-        grad_args.sampler = sampler
-        grad_tracker.finalize(grad_args, output_folder)
+        grad_tracker.finalize(output_folder, num_sampling_steps, stepsize, sampler)
 
     return all_captured, grad_tracker
 
 
 def run_switch_experiment(
-    model,
-    vae,
-    device,
-    captured_latents,
-    latent_size,
-    num_sampling_steps,
-    switch_step,
-    stepsize,
-    sampler,
-    mu,
-    save_steps_list,
-    output_folder,
-    batch_size,
-    num_samples,
-    track_grad_norm=False,
-    baseline_grad_tracker=None,
+    model: torch.nn.Module,
+    vae: AutoencoderKL,
+    device: torch.device,
+    captured_latents: list[torch.Tensor],
+    latent_size: int,
+    num_sampling_steps: int,
+    switch_step: int,
+    stepsize: float,
+    sampler: str,
+    mu: float,
+    save_steps_list: list[int],
+    output_folder: str,
+    track_grad_norm: bool = False,
+    baseline_grad_tracker: GradientNormTracker | None = None,
 ):
     """
     Run switch experiment: start from captured latent at switch_step,
     continue with null class label (cfg=1.0) for remaining steps.
     """
     os.makedirs(output_folder, exist_ok=True)
-
     remaining_steps = num_sampling_steps - switch_step
-    final_step_folder = f"{output_folder}/step_{num_sampling_steps:04d}"
-    os.makedirs(final_step_folder, exist_ok=True)
 
-    # Adjust save_steps for remaining sampling
-    adjusted_save_steps = []
-    if save_steps_list:
-        for s in save_steps_list:
-            if s > switch_step:
-                adjusted_save_steps.append(s - switch_step)
+    # Create hooks
+    hooks = []
 
-    # Create gradient tracker (persistent across batches)
+    adjusted_save_steps = [s - switch_step for s in (save_steps_list or []) if s > switch_step]
+    if remaining_steps not in adjusted_save_steps:  # Always save the final step
+        adjusted_save_steps.append(remaining_steps)
+    img_saver = IntermediateImageSaver(
+        adjusted_save_steps,
+        folder_pattern=lambda ctx: f"{output_folder}/step_{ctx.step_idx + switch_step:03d}",
+    )
+    hooks.append(img_saver)
+
     grad_tracker = None
     if track_grad_norm:
         grad_tracker = GradientNormTracker(remaining_steps)
-        print(f"Created GradientNormTracker hook for switch_{switch_step}")
+        hooks.append(grad_tracker)
 
-    # Create image saver (persistent across batches)
-    img_saver = None
-    if adjusted_save_steps:
-        img_saver = IntermediateImageSaver(adjusted_save_steps, output_folder)
-
+    # Sampling loop
     total_saved = 0
     for _, batch_latent in enumerate(tqdm(captured_latents, desc=f"Switch {switch_step}")):
         batch_latent = batch_latent.to(device)
@@ -239,16 +206,7 @@ def run_switch_experiment(
         # Use null class labels (1000)
         null_labels = torch.tensor([1000] * actual_batch_size, device=device)
 
-        # Create hooks
-        hooks = []
-        if img_saver is not None:
-            hooks.append(img_saver)
-
-        # Gradient norm tracker hook
-        if grad_tracker is not None:
-            hooks.append(grad_tracker)
-
-        samples = sample_eqm(
+        sample_eqm(
             model=model,
             vae=vae,
             device=device,
@@ -264,26 +222,13 @@ def run_switch_experiment(
             hooks=hooks,
         )
 
-        # Save final samples
-        for i_sample, sample in enumerate(samples):
-            index = total_saved + i_sample
-            Image.fromarray(sample).save(f"{final_step_folder}/{index:06d}.png")
-
         total_saved += actual_batch_size
 
-    print(f"Saved {total_saved} samples to {final_step_folder}")
-    create_npz_from_sample_folder(final_step_folder, total_saved)
-
-    # Rename intermediate step folders to match original step numbering
-    if img_saver is not None:
-        for adj_step in adjusted_save_steps:
-            orig_step = adj_step + switch_step
-            src_folder = f"{output_folder}/step_{adj_step:03d}"
-            dst_folder = f"{output_folder}/step_{orig_step:04d}"
-            if os.path.exists(src_folder):
-                os.rename(src_folder, dst_folder)
-                step_count = img_saver.step_counters[adj_step]
-                create_npz_from_sample_folder(dst_folder, step_count)
+    # Create .npz files for intermediate steps
+    for step in adjusted_save_steps:
+        step_folder = f"{output_folder}/step_{step + switch_step:03d}"
+        if os.path.exists(step_folder):
+            create_npz_from_sample_folder(step_folder, total_saved)
 
     # Finalize gradient norm tracking
     if grad_tracker is not None:
@@ -292,15 +237,7 @@ def run_switch_experiment(
             baseline_norms = baseline_grad_tracker.gradient_norms[:switch_step]
             grad_tracker.gradient_norms = baseline_norms + grad_tracker.gradient_norms
 
-        # Create args-like object for finalize
-        class GradArgs:
-            pass
-
-        grad_args = GradArgs()
-        grad_args.num_sampling_steps = num_sampling_steps  # Full trajectory length
-        grad_args.stepsize = stepsize
-        grad_args.sampler = sampler
-        grad_tracker.finalize(grad_args, output_folder)
+        grad_tracker.finalize(output_folder, num_sampling_steps, stepsize, sampler)
 
 
 def main(args):
@@ -435,9 +372,7 @@ def main(args):
             sampler=args.sampler,
             mu=args.mu,
             save_steps_list=save_steps_list,
-            output_folder=f"{args.out}/switch_{switch_step:04d}",
-            batch_size=args.batch_size,
-            num_samples=args.num_samples,
+            output_folder=f"{args.out}/switch_{switch_step:03d}",
             track_grad_norm=args.track_grad_norm,
             baseline_grad_tracker=baseline_grad_tracker,
         )

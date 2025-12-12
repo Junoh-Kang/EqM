@@ -26,13 +26,13 @@ Example Usage:
     >>> img_hook = IntermediateImageSaver([0, 50, 100], "outputs")
     >>> grad_hook = GradientNormTracker(num_sampling_steps=250)
     >>> samples = sample_eqm(model, vae, device, batch_size=16, latent_size=32, hooks=[img_hook, grad_hook])
-    >>> grad_hook.finalize(args, "outputs")
+    >>> grad_hook.finalize("outputs", num_sampling_steps=250, stepsize=1.0, sampler="euler")
 """
 
 import json
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -92,7 +92,7 @@ def sample_eqm(
         >>> img_hook = IntermediateImageSaver([0, 50, 100, 249], "outputs")
         >>> grad_hook = GradientNormTracker(num_sampling_steps=250)
         >>> samples = sample_eqm(model, vae, device, batch_size=16, latent_size=32, hooks=[img_hook, grad_hook])
-        >>> grad_hook.finalize(args, "outputs")
+        >>> grad_hook.finalize("outputs", num_sampling_steps=250, stepsize=1.0, sampler="euler")
     """
     if hooks is None:
         hooks = []
@@ -227,7 +227,7 @@ def sample_eqm_two(
         >>> img_hook = IntermediateImageSaver([0, 50, 100, 249], "outputs")
         >>> grad_hook = GradientNormTracker(num_sampling_steps=250)
         >>> samples = sample_eqm(model, vae, device, batch_size=16, latent_size=32, hooks=[img_hook, grad_hook])
-        >>> grad_hook.finalize(args, "outputs")
+        >>> grad_hook.finalize("outputs", num_sampling_steps=250, stepsize=1.0, sampler="euler")
     """
     if hooks is None:
         hooks = []
@@ -354,22 +354,33 @@ class IntermediateImageSaver:
 
     Args:
         save_steps: List of step indices at which to save images (e.g., [0, 50, 100, 250])
-        output_folder: Base folder for saving images
+        output_folder: Base folder for saving images. Required if folder_pattern is not provided.
+        folder_pattern: Callable (context) -> str that returns the folder path.
+                        If not provided, defaults to "{output_folder}/step_{step_idx:03d}"
     """
 
-    def __init__(self, save_steps, output_folder):
+    def __init__(
+        self,
+        save_steps: list[int],
+        output_folder: str | None = None,
+        folder_pattern: Callable[[SamplingHookContext], str] | None = None,
+    ):
+        if output_folder is None and folder_pattern is None:
+            raise ValueError("Either output_folder or folder_pattern must be provided")
         self.save_steps = set(save_steps)  # Use set for O(1) lookup
-        self.output_folder = output_folder
         # Track global sample counter for each step to avoid overwriting
         self.step_counters = dict.fromkeys(save_steps, 0)
-        # self.return_images = return_images
+        if folder_pattern is None:
+            self.folder_pattern = lambda ctx: f"{output_folder}/step_{ctx.step_idx:03d}"
+        else:
+            self.folder_pattern = folder_pattern
 
     def __call__(self, context: SamplingHookContext):
         """Save images if current step is in save_steps list."""
         if context.step_idx not in self.save_steps:
             return
 
-        step_folder = f"{self.output_folder}/step_{context.step_idx:03d}"
+        step_folder = self.folder_pattern(context)
         os.makedirs(step_folder, exist_ok=True)
 
         # Extract conditional part if using CFG
@@ -629,14 +640,16 @@ class GradientNormTracker:
         norms = torch.linalg.norm(out_for_norm.reshape(out_for_norm.shape[0], -1), dim=1)  # shape: (batch_size,)
         self.gradient_norms[context.step_idx - 1].extend(norms.cpu().tolist())
 
-    def finalize(self, args, folder):
+    def finalize(self, folder: str, num_sampling_steps: int, stepsize: float, sampler: str):
         """
         Compute statistics and create visualization for gradient norms.
         Call this after all sampling is complete.
 
         Args:
-            args: Arguments containing sampling parameters (num_sampling_steps, stepsize, sampler)
             folder: Output directory for saving JSON and plot
+            num_sampling_steps: Number of sampling steps
+            stepsize: Step size used during sampling
+            sampler: Sampler name (e.g., 'euler', 'heun')
         """
         print("Computing gradient norm statistics...")
         gradient_means = []
@@ -652,12 +665,12 @@ class GradientNormTracker:
 
         # Save statistics to JSON
         stats = {
-            "num_sampling_steps": args.num_sampling_steps,
+            "num_sampling_steps": num_sampling_steps,
             "total_samples": len(self.gradient_norms[0]) if len(self.gradient_norms[0]) > 0 else 0,
             "mean": gradient_means,
             "std": gradient_stds,
-            "stepsize": args.stepsize,
-            "sampler": args.sampler,
+            "stepsize": stepsize,
+            "sampler": sampler,
             "note": "Statistics computed from individual gradient L2 norms across all samples (batch-size independent)",
         }
         json_path = f"{folder}/gradient_norms.json"
@@ -667,7 +680,7 @@ class GradientNormTracker:
 
         # Create plot
         print("Creating gradient norm plot...")
-        steps = np.arange(0, args.num_sampling_steps)
+        steps = np.arange(0, num_sampling_steps)
         gradient_means = np.array(gradient_means)
         gradient_stds = np.array(gradient_stds)
 
@@ -683,7 +696,7 @@ class GradientNormTracker:
         plt.xlabel("Sampling Step", fontsize=12)
         plt.ylabel("Gradient L2 Norm", fontsize=12)
         plt.title(
-            f"Gradient L2 Norm during Sampling ({args.sampler.upper()}, stepsize={args.stepsize})",
+            f"Gradient L2 Norm during Sampling ({sampler.upper()}, stepsize={stepsize})",
             fontsize=14,
         )
         plt.legend(fontsize=10)

@@ -129,7 +129,7 @@ def main(mode, args):
     eqm_hooks_by_fm_step = {}
     for flow_step_idx in fm_save_steps_list:
         step_folder = f"{output_dir}/fm_step_{flow_step_idx:03d}"
-        img_saver = IntermediateImageSaver(eqm_save_steps_list, step_folder)
+        img_saver = IntermediateImageSaver(eqm_save_steps_list, output_folder=step_folder)
         eqm_hooks_by_fm_step[flow_step_idx] = [img_saver]
 
     print(f"Starting batch processing: {num_batches} batches of size {batch_size}...")

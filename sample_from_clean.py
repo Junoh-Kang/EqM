@@ -248,7 +248,7 @@ def main(args):
     # Finalize gradient norm statistics if enabled
     if grad_tracker is not None:
         print("Computing gradient norm statistics...")
-        grad_tracker.finalize(args, args.out)
+        grad_tracker.finalize(args.out, args.num_sampling_steps, args.stepsize, args.sampler)
 
     # Finalize distortion analysis
     print("Finalizing distortion analysis...")
