@@ -760,18 +760,23 @@ class GradientNormTracker:
         wandb_module.log({"gradient_norms": table}, step=train_step)
 
 
-def create_npz_from_sample_folder(sample_dir, num):
+def create_npz_from_sample_folder(sample_dir, num=None):
     """
     Builds a single .npz file from a folder of .png samples.
     Compatible with ADM's TensorFlow evaluation suite.
 
     Args:
         sample_dir: Directory containing .png samples named as {i:06d}.png
-        num: Number of samples to include in the .npz file (default: 50000)
+        num: Number of samples to include in the .npz file. If None, auto-detect from directory.
 
     Returns:
         npz_path: Path to the created .npz file
     """
+    if num is None:
+        png_files = [f for f in os.listdir(sample_dir) if f.endswith(".png")]
+        num = len(png_files)
+        print(f"Auto-detected {num} samples in {sample_dir}")
+
     samples = []
     print(f"Building .npz file from {num} samples in {sample_dir}...")
     for i in range(num):
