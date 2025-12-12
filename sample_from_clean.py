@@ -398,7 +398,8 @@ Example usage:
     )
     parser.add_argument(
         "--track-grad-norm",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="Enable gradient norm tracking and visualization",
     )
 

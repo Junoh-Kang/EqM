@@ -421,7 +421,10 @@ if __name__ == "__main__":
         help="Comma-separated list of steps at which to switch to null-only",
     )
     parser.add_argument(
-        "--track-grad-norm", action="store_true", help="Enable gradient norm tracking and visualization"
+        "--track-grad-norm",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable gradient norm tracking and visualization",
     )
     parser.add_argument("--uncond", type=bool, default=True, help="Enable noise conditioning")
     parser.add_argument(

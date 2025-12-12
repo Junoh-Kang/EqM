@@ -187,7 +187,10 @@ if __name__ == "__main__":
         help="Comma-separated list of sampling steps to save intermediate images (e.g., '0,50,100,249')",
     )
     parser.add_argument(
-        "--track-grad-norm", action="store_true", help="Enable gradient norm tracking and visualization"
+        "--track-grad-norm",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable gradient norm tracking and visualization",
     )
     parser.add_argument("--uncond", type=bool, default=True, help="Disable/enable noise conditioning (default: True)")
     parser.add_argument(
