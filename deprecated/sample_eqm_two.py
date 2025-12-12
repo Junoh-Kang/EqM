@@ -77,7 +77,7 @@ def main(args):
     save_steps_list = []
     if args.save_steps is not None:
         save_steps_list = [int(s.strip()) for s in args.save_steps.split(",")]
-        img_saver = IntermediateImageSaver(save_steps_list, args.out)
+        img_saver = IntermediateImageSaver(save_steps_list, output_folder=args.out)
         hooks.append(img_saver)
         print(f"Created IntermediateImageSaver hook for steps: {save_steps_list}")
 
@@ -117,7 +117,7 @@ def main(args):
     # Finalize gradient norm statistics if enabled
     if grad_tracker is not None:
         print("Computing gradient norm statistics...")
-        grad_tracker.finalize(args, args.out)
+        grad_tracker.finalize(args.out, args.num_sampling_steps, args.stepsize, args.sampler)
 
     # Create .npz files for FID evaluation
     print("Creating .npz file for final samples...")
