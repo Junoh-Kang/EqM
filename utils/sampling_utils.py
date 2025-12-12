@@ -31,7 +31,7 @@ import torch
 from PIL import Image
 from tqdm import tqdm
 
-from utils.sampling_hooks import SamplingHookContext
+from utils.sampling_hooks import GradientNormTracker, SamplingHookContext
 
 
 @torch.no_grad()
@@ -49,6 +49,7 @@ def sample_eqm(
     sampler="gd",
     mu=0.3,
     hooks=None,
+    return_cfg_components=False,
 ):
     """
     Generate samples using EqM model with gradient descent sampling.
@@ -72,6 +73,8 @@ def sample_eqm(
         hooks: List of hook callables. Each hook receives a SamplingHookContext object
                at each sampling step. Use for monitoring, logging, or saving intermediate results.
                Example hooks: IntermediateImageSaver, GradientNormTracker.
+        return_cfg_components: If True and CFG is enabled, passes individual cond/uncond outputs
+                               to hooks via out_cond and out_uncond context fields.
 
     Returns:
         samples: Generated images as numpy array, shape (batch_size, H, W, 3), dtype uint8
@@ -89,6 +92,10 @@ def sample_eqm(
     """
     if hooks is None:
         hooks = []
+
+    # Auto-enable return_cfg_components if GradientNormTracker is present
+    if any(isinstance(h, GradientNormTracker) for h in hooks):
+        return_cfg_components = True
 
     use_cfg = cfg_scale > 1.0
     n = batch_size
@@ -125,17 +132,26 @@ def sample_eqm(
     # Sampling loop
     with torch.no_grad():
         for step_idx in tqdm(range(1, num_sampling_steps + 1)):
+            out_cond = None
+            out_uncond = None
+
             if sampler == "gd":
                 # Standard gradient descent
-                out = model_fn(xt, t, y, cfg_scale)
-                if not torch.is_tensor(out):
-                    out = out[0]
+                if use_cfg and return_cfg_components:
+                    out, out_cond, out_uncond = model_fn(xt, t, y, cfg_scale, return_components=True)
+                else:
+                    out = model_fn(xt, t, y, cfg_scale)
+                    if not torch.is_tensor(out):
+                        out = out[0]
             elif sampler == "ngd":
                 # Nesterov accelerated gradient descent
                 x_ = xt + stepsize * m * mu
-                out = model_fn(x_, t, y, cfg_scale)
-                if not torch.is_tensor(out):
-                    out = out[0]
+                if use_cfg and return_cfg_components:
+                    out, out_cond, out_uncond = model_fn(x_, t, y, cfg_scale, return_components=True)
+                else:
+                    out = model_fn(x_, t, y, cfg_scale)
+                    if not torch.is_tensor(out):
+                        out = out[0]
                 m = out
             else:
                 raise ValueError(f"Unknown sampler: {sampler}")
@@ -156,6 +172,8 @@ def sample_eqm(
                     vae=vae,
                     device=device,
                     total_steps=num_sampling_steps,
+                    out_cond=out_cond,
+                    out_uncond=out_uncond,
                 )
                 for hook in hooks:
                     hook(context)
@@ -184,6 +202,7 @@ def sample_eqm_two(
     sampler="gd",
     mu=0.3,
     hooks=None,
+    return_cfg_components=False,
 ):
     """
     Generate samples using EqM model with gradient descent sampling.
@@ -207,6 +226,8 @@ def sample_eqm_two(
         hooks: List of hook callables. Each hook receives a SamplingHookContext object
                at each sampling step. Use for monitoring, logging, or saving intermediate results.
                Example hooks: IntermediateImageSaver, GradientNormTracker.
+        return_cfg_components: If True and CFG is enabled, passes individual cond/uncond outputs
+                               to hooks via out_cond and out_uncond context fields.
 
     Returns:
         samples: Generated images as numpy array, shape (batch_size, H, W, 3), dtype uint8
@@ -224,6 +245,10 @@ def sample_eqm_two(
     """
     if hooks is None:
         hooks = []
+
+    # Auto-enable return_cfg_components if GradientNormTracker is present
+    if any(isinstance(h, GradientNormTracker) for h in hooks):
+        return_cfg_components = True
 
     use_cfg = cfg_scale > 1.0
     n = batch_size
@@ -260,17 +285,26 @@ def sample_eqm_two(
     # Sampling loop
     with torch.no_grad():
         for step_idx in range(1, num_sampling_steps + 1):
+            out_cond = None
+            out_uncond = None
+
             if sampler == "gd":
                 # Standard gradient descent
-                out = model_fn(xt, t, y, cfg_scale)
-                if not torch.is_tensor(out):
-                    out = out[0]
+                if use_cfg and return_cfg_components:
+                    out, out_cond, out_uncond = model_fn(xt, t, y, cfg_scale, return_components=True)
+                else:
+                    out = model_fn(xt, t, y, cfg_scale)
+                    if not torch.is_tensor(out):
+                        out = out[0]
             elif sampler == "ngd":
                 # Nesterov accelerated gradient descent
                 x_ = xt + stepsize * m * mu
-                out = model_fn(x_, t, y, cfg_scale)
-                if not torch.is_tensor(out):
-                    out = out[0]
+                if use_cfg and return_cfg_components:
+                    out, out_cond, out_uncond = model_fn(x_, t, y, cfg_scale, return_components=True)
+                else:
+                    out = model_fn(x_, t, y, cfg_scale)
+                    if not torch.is_tensor(out):
+                        out = out[0]
                 m = out
             else:
                 raise ValueError(f"Unknown sampler: {sampler}")
@@ -313,6 +347,8 @@ def sample_eqm_two(
                     vae=vae,
                     device=device,
                     total_steps=num_sampling_steps,
+                    out_cond=out_cond,
+                    out_uncond=out_uncond,
                 )
                 for hook in hooks:
                     hook(context)

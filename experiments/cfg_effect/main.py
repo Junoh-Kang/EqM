@@ -236,6 +236,12 @@ def run_switch_experiment(
             baseline_norms = baseline_grad_tracker.gradient_norms[:switch_step]
             grad_tracker.gradient_norms = baseline_norms + grad_tracker.gradient_norms
 
+            baseline_norms_cond = baseline_grad_tracker.gradient_norms_cond[:switch_step]
+            grad_tracker.gradient_norms_cond = baseline_norms_cond + grad_tracker.gradient_norms_cond
+
+            baseline_norms_uncond = baseline_grad_tracker.gradient_norms_uncond[:switch_step]
+            grad_tracker.gradient_norms_uncond = baseline_norms_uncond + grad_tracker.gradient_norms_uncond
+
         grad_tracker.finalize(output_folder, num_sampling_steps, stepsize, sampler)
 
 

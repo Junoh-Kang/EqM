@@ -40,12 +40,14 @@ class SamplingHookContext:
     xt: torch.Tensor  # Current latent state
     t: torch.Tensor  # Current timestep
     y: torch.Tensor  # Class labels
-    out: torch.Tensor  # Model output/gradient
+    out: torch.Tensor  # Model output/gradient (CFG-combined when use_cfg=True)
     step_idx: int  # Current step index (1-indexed)
     use_cfg: bool  # Whether CFG is enabled
     vae: Any  # VAE decoder for image conversion
     device: torch.device  # Device
     total_steps: int  # Total number of sampling steps
+    out_cond: torch.Tensor | None = None  # Class label output before CFG (only when use_cfg=True)
+    out_uncond: torch.Tensor | None = None  # Null label output before CFG (only when use_cfg=True)
 
 
 class IntermediateImageSaver:
@@ -327,24 +329,42 @@ class GradientNormTracker:
     """
     Hook for tracking gradient L2 norms during sampling.
 
+    When CFG is used, tracks three norms:
+    - gradient_norms: CFG-applied output (combined)
+    - gradient_norms_cond: conditional output (out_cond)
+    - gradient_norms_uncond: unconditional output (out_uncond)
+
+    When CFG is not used, only gradient_norms is tracked.
+
     Args:
         num_steps: Number of sampling steps (for pre-allocating storage)
     """
 
     def __init__(self, num_steps):
-        self.gradient_norms = [[] for _ in range(num_steps)]
+        self.gradient_norms = [[] for _ in range(num_steps)]  # CFG-applied output norms
+        self.gradient_norms_cond = [[] for _ in range(num_steps)]  # conditional output norms
+        self.gradient_norms_uncond = [[] for _ in range(num_steps)]  # unconditional output norms
 
     def __call__(self, context: SamplingHookContext):
         """Accumulate gradient L2 norms for the current step."""
-        # Extract conditional part if using CFG
+        # Track CFG-applied output norm (first half, since duplicated)
         out_for_norm = context.out
         if context.use_cfg:
             batch_size = context.out.shape[0] // 2
             out_for_norm = context.out[:batch_size]
-
-        # Compute L2 norm for each sample in the batch
-        norms = torch.linalg.norm(out_for_norm.reshape(out_for_norm.shape[0], -1), dim=1)  # shape: (batch_size,)
+        norms = torch.linalg.norm(out_for_norm.reshape(out_for_norm.shape[0], -1), dim=1)
         self.gradient_norms[context.step_idx - 1].extend(norms.cpu().tolist())
+
+        # Track cond/uncond norms when CFG is used
+        if context.use_cfg and context.out_cond is not None and context.out_uncond is not None:
+            out_cond = context.out_cond
+            out_uncond = context.out_uncond
+
+            norms_cond = torch.linalg.norm(out_cond.reshape(out_cond.shape[0], -1), dim=1)
+            self.gradient_norms_cond[context.step_idx - 1].extend(norms_cond.cpu().tolist())
+
+            norms_uncond = torch.linalg.norm(out_uncond.reshape(out_uncond.shape[0], -1), dim=1)
+            self.gradient_norms_uncond[context.step_idx - 1].extend(norms_uncond.cpu().tolist())
 
     def finalize(self, folder: str, num_sampling_steps: int, stepsize: float, sampler: str):
         """
@@ -358,27 +378,41 @@ class GradientNormTracker:
             sampler: Sampler name (e.g., 'euler', 'heun')
         """
         print("Computing gradient norm statistics...")
-        gradient_means = []
-        gradient_stds = []
 
-        for step_norms in self.gradient_norms:
-            if len(step_norms) > 0:
-                gradient_means.append(np.mean(step_norms))
-                gradient_stds.append(np.std(step_norms))
-            else:
-                gradient_means.append(0.0)
-                gradient_stds.append(0.0)
+        def compute_stats(norm_list):
+            means, stds = [], []
+            for step_norms in norm_list:
+                if len(step_norms) > 0:
+                    means.append(np.mean(step_norms))
+                    stds.append(np.std(step_norms))
+                else:
+                    means.append(0.0)
+                    stds.append(0.0)
+            return means, stds
+
+        # Compute stats for CFG-applied output
+        cfg_means, cfg_stds = compute_stats(self.gradient_norms)
+
+        # Compute stats for cond/uncond outputs
+        has_cond = any(len(s) > 0 for s in self.gradient_norms_cond)
+        has_uncond = any(len(s) > 0 for s in self.gradient_norms_uncond)
+        cond_means, cond_stds = compute_stats(self.gradient_norms_cond) if has_cond else ([], [])
+        uncond_means, uncond_stds = compute_stats(self.gradient_norms_uncond) if has_uncond else ([], [])
 
         # Save statistics to JSON
         stats = {
             "num_sampling_steps": num_sampling_steps,
             "total_samples": len(self.gradient_norms[0]) if len(self.gradient_norms[0]) > 0 else 0,
-            "mean": gradient_means,
-            "std": gradient_stds,
+            "cfg_output": {"mean": cfg_means, "std": cfg_stds},
             "stepsize": stepsize,
             "sampler": sampler,
-            "note": "Statistics computed from individual gradient L2 norms across all samples (batch-size independent)",
+            "note": "Statistics computed from individual gradient L2 norms across all samples",
         }
+        if has_cond:
+            stats["cond_output"] = {"mean": cond_means, "std": cond_stds}
+        if has_uncond:
+            stats["uncond_output"] = {"mean": uncond_means, "std": uncond_stds}
+
         json_path = f"{folder}/gradient_norms.json"
         with open(json_path, "w") as f:
             json.dump(stats, f, indent=2)
@@ -387,18 +421,50 @@ class GradientNormTracker:
         # Create plot
         print("Creating gradient norm plot...")
         steps = np.arange(0, num_sampling_steps)
-        gradient_means = np.array(gradient_means)
-        gradient_stds = np.array(gradient_stds)
+        cfg_means = np.array(cfg_means)
+        cfg_stds = np.array(cfg_stds)
 
         plt.figure(figsize=(10, 6))
-        plt.plot(steps, gradient_means, linewidth=2, label="Mean L2 Norm")
+
+        # Plot CFG-applied output norms
+        plt.plot(steps, cfg_means, linewidth=2, label="CFG Output Mean", color="green")
         plt.fill_between(
             steps,
-            gradient_means - gradient_stds,
-            gradient_means + gradient_stds,
-            alpha=0.3,
-            label="Mean ± Std",
+            cfg_means - cfg_stds,
+            cfg_means + cfg_stds,
+            alpha=0.2,
+            color="green",
+            label="CFG Output ± Std",
         )
+
+        # Plot conditional output norms if available
+        if has_cond:
+            cond_means = np.array(cond_means)
+            cond_stds = np.array(cond_stds)
+            plt.plot(steps, cond_means, linewidth=2, label="Cond Output Mean", color="blue")
+            plt.fill_between(
+                steps,
+                cond_means - cond_stds,
+                cond_means + cond_stds,
+                alpha=0.2,
+                color="blue",
+                label="Cond Output ± Std",
+            )
+
+        # Plot unconditional output norms if available
+        if has_uncond:
+            uncond_means = np.array(uncond_means)
+            uncond_stds = np.array(uncond_stds)
+            plt.plot(steps, uncond_means, linewidth=2, label="Uncond Output Mean", color="orange")
+            plt.fill_between(
+                steps,
+                uncond_means - uncond_stds,
+                uncond_means + uncond_stds,
+                alpha=0.2,
+                color="orange",
+                label="Uncond Output ± Std",
+            )
+
         plt.xlabel("Sampling Step", fontsize=12)
         plt.ylabel("Gradient L2 Norm", fontsize=12)
         plt.title(
@@ -426,41 +492,81 @@ class GradientNormTracker:
         if wandb_module is None:
             return
 
-        # Compute statistics
-        gradient_means = []
-        gradient_stds = []
+        def compute_stats(norm_list):
+            means, stds = [], []
+            for step_norms in norm_list:
+                if len(step_norms) > 0:
+                    means.append(np.mean(step_norms))
+                    stds.append(np.std(step_norms))
+                else:
+                    means.append(0.0)
+                    stds.append(0.0)
+            return means, stds
 
-        for step_norms in self.gradient_norms:
-            if len(step_norms) > 0:
-                gradient_means.append(np.mean(step_norms))
-                gradient_stds.append(np.std(step_norms))
-            else:
-                gradient_means.append(0.0)
-                gradient_stds.append(0.0)
+        # Compute stats for CFG-applied output
+        cfg_means, cfg_stds = compute_stats(self.gradient_norms)
+
+        # Compute stats for cond/uncond outputs
+        has_cond = any(len(s) > 0 for s in self.gradient_norms_cond)
+        has_uncond = any(len(s) > 0 for s in self.gradient_norms_uncond)
+        cond_means, cond_stds = compute_stats(self.gradient_norms_cond) if has_cond else ([], [])
+        uncond_means, uncond_stds = compute_stats(self.gradient_norms_uncond) if has_uncond else ([], [])
 
         # Create a table for gradient norms vs sampling steps
-        # This allows WandB to plot with sampling_step on x-axis
         data = []
-        for sampling_step, (mean_norm, std_norm) in enumerate(zip(gradient_means, gradient_stds)):
-            data.append(
+        for step in range(len(cfg_means)):
+            row = [
+                step,
+                cfg_means[step],
+                cfg_stds[step],
+                cfg_means[step] + cfg_stds[step],
+                cfg_means[step] - cfg_stds[step],
+            ]
+            if has_cond:
+                row.extend(
+                    [
+                        cond_means[step],
+                        cond_stds[step],
+                        cond_means[step] + cond_stds[step],
+                        cond_means[step] - cond_stds[step],
+                    ]
+                )
+            if has_uncond:
+                row.extend(
+                    [
+                        uncond_means[step],
+                        uncond_stds[step],
+                        uncond_means[step] + uncond_stds[step],
+                        uncond_means[step] - uncond_stds[step],
+                    ]
+                )
+            data.append(row)
+
+        columns = [
+            "sampling_step",
+            "cfg_output_norm_mean",
+            "cfg_output_norm_std",
+            "cfg_output_norm_upper",
+            "cfg_output_norm_lower",
+        ]
+        if has_cond:
+            columns.extend(
                 [
-                    sampling_step,
-                    mean_norm,
-                    std_norm,
-                    mean_norm + std_norm,  # Upper bound
-                    mean_norm - std_norm,  # Lower bound
+                    "cond_output_norm_mean",
+                    "cond_output_norm_std",
+                    "cond_output_norm_upper",
+                    "cond_output_norm_lower",
+                ]
+            )
+        if has_uncond:
+            columns.extend(
+                [
+                    "uncond_output_norm_mean",
+                    "uncond_output_norm_std",
+                    "uncond_output_norm_upper",
+                    "uncond_output_norm_lower",
                 ]
             )
 
-        table = wandb_module.Table(
-            columns=[
-                "sampling_step",
-                "gradient_norm_mean",
-                "gradient_norm_std",
-                "gradient_norm_upper",
-                "gradient_norm_lower",
-            ],
-            data=data,
-        )
-        # Log the table with a consistent key (train_step is already in the table data)
+        table = wandb_module.Table(columns=columns, data=data)
         wandb_module.log({"gradient_norms": table}, step=train_step)
