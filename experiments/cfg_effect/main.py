@@ -32,13 +32,12 @@ from tqdm import tqdm
 
 from download import find_model
 from models import EqM_models
-from utils.sampling_utils import (
+from utils.sampling_hooks import (
     GradientNormTracker,
     IntermediateImageSaver,
     SamplingHookContext,
-    create_npz_from_sample_folder,
-    sample_eqm,
 )
+from utils.sampling_utils import create_npz_from_sample_folder, sample_eqm
 
 
 class LatentCaptureHook:

@@ -18,7 +18,8 @@ from tqdm import tqdm
 
 from download import find_model
 from models import EqM_models
-from utils.sampling_utils import GradientNormTracker, IntermediateImageSaver, create_npz_from_sample_folder, sample_eqm
+from utils.sampling_hooks import GradientNormTracker, IntermediateImageSaver
+from utils.sampling_utils import create_npz_from_sample_folder, sample_eqm
 
 
 def main(args):
