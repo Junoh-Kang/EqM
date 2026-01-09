@@ -169,7 +169,7 @@ def main(args):
     hooks = []
 
     if len(save_steps_list) > 0:
-        img_saver = IntermediateImageSaver(save_steps_list, args.out)
+        img_saver = IntermediateImageSaver(save_steps_list, output_folder=args.out)
         hooks.append(img_saver)
         print(f"Created IntermediateImageSaver hook for steps: {save_steps_list}")
 
@@ -248,7 +248,7 @@ def main(args):
     # Finalize gradient norm statistics if enabled
     if grad_tracker is not None:
         print("Computing gradient norm statistics...")
-        grad_tracker.finalize(args, args.out)
+        grad_tracker.finalize(args.out, args.num_sampling_steps, args.stepsize, args.sampler)
 
     # Finalize distortion analysis
     print("Finalizing distortion analysis...")
@@ -398,7 +398,8 @@ Example usage:
     )
     parser.add_argument(
         "--track-grad-norm",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="Enable gradient norm tracking and visualization",
     )
 

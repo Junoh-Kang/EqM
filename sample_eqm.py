@@ -18,7 +18,8 @@ from tqdm import tqdm
 
 from download import find_model
 from models import EqM_models
-from utils.sampling_utils import GradientNormTracker, IntermediateImageSaver, create_npz_from_sample_folder, sample_eqm
+from utils.sampling_hooks import GradientNormTracker, IntermediateImageSaver
+from utils.sampling_utils import create_npz_from_sample_folder, sample_eqm
 
 
 def main(args):
@@ -80,7 +81,7 @@ def main(args):
     if args.save_steps is not None:
         save_steps_list = [int(s.strip()) for s in args.save_steps.split(",")]
         img_saver = IntermediateImageSaver(
-            save_steps_list, f"{args.out}/{args.sampler}-{args.stepsize}-cfg{args.cfg_scale}"
+            save_steps_list, output_folder=f"{args.out}/{args.sampler}-{args.stepsize}-cfg{args.cfg_scale}"
         )
         hooks.append(img_saver)
         print(f"Created IntermediateImageSaver hook for steps: {save_steps_list}")
@@ -130,7 +131,7 @@ def main(args):
     # Finalize gradient norm statistics if enabled
     if grad_tracker is not None:
         print("Computing gradient norm statistics...")
-        grad_tracker.finalize(args, args.out)
+        grad_tracker.finalize(args.out, args.num_sampling_steps, args.stepsize, args.sampler)
 
     # Create .npz files for FID evaluation
     print("Creating .npz file for final samples...")
@@ -187,7 +188,10 @@ if __name__ == "__main__":
         help="Comma-separated list of sampling steps to save intermediate images (e.g., '0,50,100,249')",
     )
     parser.add_argument(
-        "--track-grad-norm", action="store_true", help="Enable gradient norm tracking and visualization"
+        "--track-grad-norm",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable gradient norm tracking and visualization",
     )
     parser.add_argument("--uncond", type=bool, default=True, help="Disable/enable noise conditioning (default: True)")
     parser.add_argument(

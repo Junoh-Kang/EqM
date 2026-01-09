@@ -36,11 +36,8 @@ from utils.arg_utils import (
     parse_sample_args,
     parse_transport_args,
 )
-from utils.sampling_utils import (
-    GradientNormTracker,
-    WandBImageLogger,
-    sample_eqm,
-)
+from utils.sampling_hooks import GradientNormTracker, WandBImageLogger
+from utils.sampling_utils import sample_eqm
 from utils.utils import imagenet_label_from_idx
 
 try:

@@ -278,9 +278,15 @@ class EqM(nn.Module):
             return x, act
         return x
 
-    def forward_with_cfg(self, x, t, y, cfg_scale, return_act=False, get_energy=False, train=False):
+    def forward_with_cfg(
+        self, x, t, y, cfg_scale, return_act=False, get_energy=False, train=False, return_components=False
+    ):
         """
         Forward pass of EqM, but also batches the uncondional forward pass for classifier-free guidance.
+
+        Args:
+            return_components: If True, returns (combined_out, cond_out, uncond_out) tuple
+                               for tracking individual outputs before CFG combination.
         """
         # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
         half = x[: len(x) // 2]
@@ -305,9 +311,12 @@ class EqM(nn.Module):
         cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
         half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
         eps = torch.cat([half_eps, half_eps], dim=0)
+        combined_out = torch.cat([eps, rest], dim=1)
+        if return_components:
+            return combined_out, cond_eps, uncond_eps
         if get_energy:
-            return torch.cat([eps, rest], dim=1), E
-        return torch.cat([eps, rest], dim=1)
+            return combined_out, E
+        return combined_out
 
 
 #################################################################################
